@@ -1,0 +1,12 @@
+# 程序运行时产生的数据，不要提交
+data/
+backups/
+profiles/
+*.log
+
+# 系统 / 编辑器
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

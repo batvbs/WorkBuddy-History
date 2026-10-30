@@ -1,0 +1,1455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WorkBuddy 对话管家</title>
+<style>
+  :root{
+    --bg:#f4f6fa; --panel:#ffffff; --line:#e5e9f0; --line-2:#eef1f6;
+    --text:#1a2130; --muted:#6b7688; --faint:#98a2b3;
+    --accent:#2f6cf6; --accent-d:#2559d6; --accent-soft:#edf3ff;
+    --green:#199a5c; --green-soft:#e8f7ef;
+    --amber:#c9820d; --amber-soft:#fdf3e2;
+    --red:#d94a4a; --red-soft:#fdeeee;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:"Segoe UI","Microsoft YaHei UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+    font-size:14px; -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .app{display:flex; height:100vh}
+
+  /* ---------- sidebar ---------- */
+  .side{
+    width:236px; flex:0 0 236px; background:var(--panel);
+    border-right:1px solid var(--line); display:flex; flex-direction:column; padding:18px 14px 14px;
+  }
+  .brand{display:flex; align-items:center; gap:10px; padding:2px 6px 20px}
+  .brand .mark{
+    width:36px;height:36px;border-radius:11px;flex:0 0 36px;
+    background:linear-gradient(145deg,#4a86ff,#2f4ff6);
+    color:#fff;font-weight:700;font-size:13px;letter-spacing:.5px;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 4px 10px rgba(47,92,246,.28);
+  }
+  .brand b{display:block;font-size:15px;letter-spacing:.2px}
+  .brand span{display:block;font-size:11px;color:var(--faint);margin-top:2px}
+  .brand-row{display:flex;align-items:center;gap:6px}
+  .iconbtn{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:22px;height:22px;padding:0;border:1px solid transparent;border-radius:6px;
+    background:none;color:var(--faint);cursor:pointer;transition:.15s;
+  }
+  .iconbtn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .iconbtn:hover{background:#f1f4f9;color:var(--accent);border-color:#e3e9f2}
+  .iconbtn.spin svg{animation:spin .6s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .nav{display:flex;flex-direction:column;gap:4px}
+  .nav a{
+    display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;
+    color:#3c4658;text-decoration:none;cursor:pointer;font-size:13.5px;transition:background .12s,color .12s;
+  }
+  .nav a svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+  .nav a:hover{background:#f4f7fc}
+  .nav a.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .nav a.active svg{opacity:1}
+  .side-foot{margin-top:auto;padding-top:14px;border-top:1px solid var(--line-2);display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .side-foot .ver{font-size:11.5px;color:var(--faint)}
+  .linkbtn{background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:4px 6px;border-radius:6px;font-family:inherit}
+  .linkbtn:hover{background:#f1f4f9;color:var(--text)}
+
+  /* ---------- main ---------- */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .topbar{
+    height:64px;flex:0 0 64px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 26px;background:rgba(244,246,250,.86);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);
+  }
+  .topbar h1{margin:0;font-size:16px;font-weight:600}
+  .topbar p{margin:3px 0 0;font-size:12px;color:var(--muted)}
+  /* ---------- edition pills (top right) ---------- */
+  .who{display:flex;align-items:center;gap:8px;min-width:0}
+  .ed{
+    display:flex;align-items:center;gap:7px;height:34px;padding:0 11px 0 10px;
+    border:1px solid var(--line);border-radius:10px;background:#fff;cursor:pointer;
+    transition:border-color .12s,background .12s,box-shadow .12s;white-space:nowrap;
+  }
+  .ed:hover{border-color:#cfd8e6;background:#fbfcfe}
+  .ed.on{border-color:#cfe0ff;background:var(--accent-soft);box-shadow:0 1px 2px rgba(47,108,246,.10)}
+  .ed .dot{width:6px;height:6px;border-radius:50%;background:#cbd3e0;flex:0 0 6px}
+  .ed .dot.live{background:var(--green);box-shadow:0 0 0 3px rgba(25,154,92,.12)}
+  .ed .edn{font-size:12px;font-weight:600;color:#48536a}
+  .ed.on .edn{color:var(--accent)}
+  .ed .acct{font-size:12px;color:#39435a;font-variant-numeric:tabular-nums;max-width:130px;overflow:hidden;text-overflow:ellipsis}
+  .ed .acct.none{color:var(--faint);font-weight:500}
+  .ed .run{font-size:10px;color:var(--green);border:1px solid #cdeadb;background:#f2fbf6;border-radius:5px;padding:1px 5px;line-height:1.5}
+  @media (max-width:1000px){ .ed .run{display:none} }
+  @media (max-width:760px){ .ed .acct{max-width:78px} }
+  .scroll{flex:1;overflow-y:auto;padding:22px 26px 36px}
+  .scroll::-webkit-scrollbar{width:10px}
+  .scroll::-webkit-scrollbar-thumb{background:#d8dee8;border-radius:6px;border:3px solid var(--bg)}
+  .page{max-width:1080px}
+  .hidden{display:none !important}
+
+  /* ---------- cards ---------- */
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:14px 16px}
+  .stat .k{font-size:11.5px;color:var(--muted);letter-spacing:.2px}
+  .stat .v{font-size:21px;font-weight:650;margin-top:6px;letter-spacing:-.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stat .v small{font-size:11.5px;font-weight:500;color:var(--faint);margin-left:3px}
+  .stat .archlink{display:inline-block;margin-top:5px;font-size:11.5px;color:var(--accent);cursor:pointer;text-decoration:none;border-bottom:1px dashed currentColor}
+  .stat .archlink:hover{opacity:.75}
+  .stat .archlink.hidden{display:none}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:16px;overflow:hidden}
+  .card-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;border-bottom:1px solid var(--line-2)}
+  .card-h h2{margin:0;font-size:13.5px;font-weight:600}
+  .card-h .sub{font-size:11.5px;color:var(--faint);margin-top:3px}
+  .card-b{padding:16px 18px}
+  .card-b.tight{padding:6px 8px}
+
+  /* ---------- buttons ---------- */
+  .btn{
+    height:34px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--text);
+    font-size:13px;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+    transition:background .12s,border-color .12s,box-shadow .12s;white-space:nowrap;
+  }
+  .btn:hover{background:#f7f9fc;border-color:#d9e0ea}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 1px 2px rgba(47,108,246,.25)}
+  .btn.primary:hover{background:var(--accent-d);border-color:var(--accent-d)}
+  .btn.danger{color:var(--red);border-color:#f0d4d4}
+  .btn.danger:hover{background:var(--red-soft)}
+  .btn.sm{height:29px;padding:0 11px;font-size:12px;border-radius:8px}
+  .btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+  .btn.ghost:hover{background:#f1f4f9;color:var(--text)}
+  .btn.recover{
+    background:linear-gradient(180deg,#4d8bff,#2f6cf6);border-color:#2f6cf6;color:#fff;
+    box-shadow:0 2px 6px -2px rgba(47,108,246,.55);
+  }
+  .btn.recover:hover{background:linear-gradient(180deg,#3d7cf7,#2559d6);border-color:#2559d6}
+
+  /* ---------- nickname ---------- */
+  .nick-wrap{display:inline-flex;align-items:center;gap:5px;vertical-align:middle}
+  .nick{
+    display:inline-flex;align-items:center;gap:4px;max-width:170px;
+    font-size:12px;font-weight:600;color:var(--accent);
+    background:var(--accent-soft);border:1px solid #dbe6ff;border-radius:6px;
+    padding:1px 7px;cursor:pointer;line-height:1.6;
+  }
+  .nick:hover{background:#e3ecff;border-color:#c5d8ff}
+  .nick .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .nick svg{width:11px;height:11px;opacity:.65;flex:0 0 11px}
+  .nick-add{
+    border:1px dashed #ccd7e6;background:#fff;color:var(--faint);cursor:pointer;
+    font-family:inherit;font-size:11.5px;line-height:1.6;border-radius:6px;padding:1px 7px;
+    display:inline-flex;align-items:center;gap:3px;
+  }
+  .nick-add:hover{border-color:#9db8ff;color:var(--accent);background:var(--accent-soft)}
+  .nick-input{
+    font-family:inherit;font-size:12px;width:130px;height:24px;
+    border:1px solid #9db8ff;border-radius:6px;padding:0 7px;outline:none;
+    box-shadow:0 0 0 3px rgba(47,108,246,.10);color:var(--text);
+  }
+
+  /* ---------- recover dialog ---------- */
+  .rec-group{border:1px solid var(--line);border-radius:11px;margin-bottom:10px;overflow:hidden}
+  .rec-group-h{
+    display:flex;align-items:center;gap:8px;padding:9px 12px;background:#fafbfe;
+    border-bottom:1px solid var(--line-2);font-size:12.5px;
+  }
+  .rec-group-h .who2{font-weight:600}
+  .rec-group-h .cnt{margin-left:auto;font-size:11.5px;color:var(--faint)}
+  .rec-item{
+    display:flex;align-items:center;gap:9px;padding:8px 12px;cursor:pointer;
+    border-bottom:1px solid var(--line-2);font-size:12.5px;
+  }
+  .rec-item:last-child{border-bottom:0}
+  .rec-item:hover{background:#f8faff}
+  .rec-item input{margin:0;width:14px;height:14px;accent-color:var(--accent);cursor:pointer}
+  .rec-item .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rec-item .sz{font-size:11px;color:var(--faint);flex:0 0 auto}
+  .rec-scroll{max-height:320px;overflow:auto}
+
+  /* ---------- list rows ---------- */
+  .row{
+    display:grid;align-items:center;gap:10px;padding:12px;border-radius:10px;
+    grid-template-columns:minmax(0,1.7fr) 84px 84px minmax(0,1.1fr) 158px;
+  }
+  .row > *{min-width:0}
+  .row.head{font-size:11.5px;color:var(--faint);padding:6px 12px 8px;font-weight:500;white-space:nowrap}
+  .row.item{border:1px solid transparent}
+  .row.item:hover{background:#f8fafd;border-color:var(--line)}
+  .row .t{min-width:0}
+  .row .t b{display:block;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .t span{display:block;font-size:11.5px;color:var(--faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .t .ttl{display:flex;align-items:center;gap:8px;min-width:0}
+  .row .t .ttl b{flex:0 1 auto;min-width:0}
+  .row .t .ttl .badge{flex:0 0 auto}
+  .row .num{font-size:12.5px;color:#48536a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .acts{display:flex;gap:6px;justify-content:flex-end}
+
+  @media (max-width:1080px){
+    .row{grid-template-columns:minmax(0,1.7fr) 78px 78px 150px}
+    .row .col-path{display:none}
+    .stats{grid-template-columns:repeat(2,1fr)}
+  }
+  @media (max-width:860px){
+    .row{grid-template-columns:minmax(0,1fr) 76px 148px}
+    .row .col-size{display:none}
+  }
+
+  .empty{padding:38px 20px;text-align:center;color:var(--faint);font-size:12.5px}
+  .empty svg{width:34px;height:34px;stroke:#c8d1de;fill:none;stroke-width:1.5;margin-bottom:10px}
+
+  .badge{display:inline-flex;align-items:center;gap:4px;height:21px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;white-space:nowrap}
+  .badge.g{background:var(--green-soft);color:var(--green)}
+  .badge.a{background:var(--amber-soft);color:var(--amber)}
+  .badge.r{background:var(--red-soft);color:var(--red)}
+  .badge.b{background:var(--accent-soft);color:var(--accent)}
+  .badge.n{background:#f1f4f9;color:var(--muted)}
+
+  /* ---------- account ---------- */
+  .me{display:flex;align-items:center;gap:16px}
+  .me .big-av{
+    width:54px;height:54px;border-radius:16px;flex:0 0 54px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(145deg,#eaf1ff,#dbe7ff);color:#2f5edb;font-weight:700;font-size:17px;border:1px solid #d3e0ff;
+  }
+  .me .info{min-width:0;flex:1}
+  .me .info b{font-size:15px;display:block}
+  .me .info .meta{font-size:12px;color:var(--muted);margin-top:5px;display:flex;flex-wrap:wrap;gap:6px 14px}
+  .me .info .meta span{display:inline-flex;gap:5px;align-items:center}
+  .me .info .meta i{font-style:normal;color:var(--faint)}
+  .daysbar{height:6px;border-radius:4px;background:#eef1f6;overflow:hidden;margin-top:12px}
+  .daysbar i{display:block;height:100%;border-radius:4px;background:var(--green)}
+  .acct-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;min-width:0}
+  .acct{
+    border:1px solid var(--line);border-radius:12px;padding:14px 15px;background:#fff;min-width:0;
+    display:flex;flex-direction:column;gap:10px;transition:border-color .12s,box-shadow .12s;
+  }
+  .acct:hover{border-color:#d3dcea;box-shadow:0 4px 14px rgba(24,39,75,.05)}
+  .acct.current{border-color:#cfe0ff;background:linear-gradient(180deg,#fbfdff,#fff)}
+  .acct .top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+  .acct .top > div:first-child{min-width:0;flex:1 1 auto}
+  .acct .name{font-size:13.5px;font-weight:650;letter-spacing:.2px;white-space:nowrap}
+  .acct .uin{font-size:11px;color:var(--faint);margin-top:3px;font-variant-numeric:tabular-nums;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .acct .foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
+  .acct .foot .meta{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .acct .foot .btns{display:flex;gap:6px;flex:0 0 auto}
+  .acct .tags{display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex:0 0 auto}
+
+  .note{
+    display:flex;gap:10px;padding:12px 14px;border-radius:11px;background:#fbfcfe;border:1px solid var(--line);
+    font-size:12px;color:var(--muted);line-height:1.7;
+  }
+  .note svg{width:16px;height:16px;flex:0 0 16px;stroke:var(--faint);fill:none;stroke-width:1.7;margin-top:2px}
+  .note b{color:#3d4759;font-weight:600}
+  .note.warn{background:#fffbf3;border-color:#f6e4c4}
+  .note.warn svg{stroke:var(--amber)}
+  .note.danger{background:#fdf3f3;border-color:#f3cfcf}
+  .note.danger svg{stroke:var(--red)}
+  .note.danger b{color:#a83232}
+
+  /* ---------- modal ---------- */
+  .modal-wrap{position:fixed;inset:0;background:rgba(20,28,42,.34);display:flex;align-items:center;justify-content:center;z-index:60;padding:26px}
+  .modal{background:#fff;border-radius:16px;width:540px;max-width:100%;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(16,24,40,.24)}
+  .modal.wide{width:720px}
+  .modal-h{padding:18px 20px 12px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .modal-h h3{margin:0;font-size:15px}
+  .modal-h p{margin:5px 0 0;font-size:12px;color:var(--muted);line-height:1.6}
+  .modal-b{padding:4px 20px 8px;overflow-y:auto;font-size:13px;line-height:1.75;color:#39435a}
+  .modal-f{padding:14px 20px 18px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--line-2);margin-top:8px}
+  .x{background:none;border:0;cursor:pointer;color:var(--faint);padding:4px;border-radius:6px;line-height:0}
+  .x:hover{background:#f1f4f9;color:var(--text)}
+  .opt{display:flex;gap:10px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;cursor:pointer;margin-bottom:8px;align-items:flex-start}
+  .opt:hover{border-color:#d3dcea;background:#fbfcfe}
+  .opt input{margin:3px 0 0}
+  .opt .o-t{font-size:13px;font-weight:600}
+  .opt .o-d{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.6}
+  .check{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;padding:6px 0}
+  .check input{margin:3px 0 0}
+  .kv{display:grid;grid-template-columns:84px 1fr;gap:6px 12px;font-size:12.5px;margin:10px 0 4px}
+  .kv dt{color:var(--faint)}
+  .kv dd{margin:0;color:#37425a}
+
+  /* ---------- overlay / toast ---------- */
+  .overlay{position:fixed;inset:0;background:rgba(248,250,253,.72);backdrop-filter:blur(2px);z-index:80;display:flex;align-items:center;justify-content:center}
+  .spin-box{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px 26px;display:flex;align-items:center;gap:14px;box-shadow:0 16px 40px rgba(16,24,40,.12)}
+  .spinner{width:22px;height:22px;border-radius:50%;border:2.5px solid #dbe4f5;border-top-color:var(--accent);animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .spin-box .t{font-size:13px;font-weight:600}
+  .spin-box .d{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .toasts{position:fixed;right:22px;bottom:20px;display:flex;flex-direction:column;gap:8px;z-index:90}
+  .toast{
+    background:#1f2937;color:#fff;border-radius:10px;padding:11px 15px;font-size:12.5px;max-width:380px;
+    box-shadow:0 12px 30px rgba(16,24,40,.25);animation:tin .18s ease-out;line-height:1.6;
+  }
+  .toast.ok{background:#12805a}
+  .toast.err{background:#b13434}
+  @keyframes tin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="mark">WB</div>
+      <div>
+        <div class="brand-row">
+          <b>对话管家</b>
+          <button class="iconbtn" id="btnReload" title="刷新页面" aria-label="刷新页面">
+            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+          </button>
+        </div>
+        <span>WorkBuddy backup &amp; switch</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a data-page="sessions" class="active">
+        <svg viewBox="0 0 24 24"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h4l2 2.5h7A1.5 1.5 0 0 1 20 10v7.5A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z"/><path d="M4 11h16"/></svg>
+        对话备份
+      </a>
+      <a data-page="accounts">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.4"/><path d="M4.8 19.2a7.4 7.4 0 0 1 14.4 0"/></svg>
+        账号切换
+      </a>
+    </nav>
+    <div class="side-foot">
+      <span class="ver" id="ver">v—</span>
+      <button class="linkbtn" id="btnShortcut">桌面图标</button>
+      <button class="linkbtn" id="btnQuit">退出程序</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">对话备份与恢复</h1>
+        <p id="pageDesc">把本地对话整份存下来，需要时一键还原</p>
+      </div>
+      <div class="who" id="who"><span class="badge n">未登录</span></div>
+    </header>
+
+    <div class="scroll" id="scroll">
+      <!-- ================= sessions ================= -->
+      <section class="page" id="page-sessions">
+        <div class="stats">
+          <div class="stat"><div class="k">本地对话</div><div class="v" id="stSessions">—</div></div>
+          <div class="stat"><div class="k">对话数据占用</div><div class="v" id="stBytes">—</div></div>
+          <div class="stat"><div class="k">当前账号可见</div><div class="v" id="stMine">—</div><a class="archlink hidden" id="lnkArchived">已归档 0</a></div>
+          <div class="stat"><div class="k">已有备份</div><div class="v" id="stBackups">—</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h">
+            <div>
+              <h2>备份</h2>
+              <div class="sub" id="backupHint">备份内容包括对话数据库、全部本地对话文件与账号快照</div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="btnOpenBackups">打开备份目录</button>
+              <button class="btn primary" id="btnBackup">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                立即备份
+              </button>
+            </div>
+          </div>
+          <div class="card-b tight" id="backupList"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h">
+            <div>
+              <h2>本地对话</h2>
+              <div class="sub">扫描 <code id="wbPath">~/.workbuddy/projects</code> 得到，按最近活动排序</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn sm recover" id="btnRecover">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+                找回对话
+              </button>
+              <button class="btn sm" id="btnAllSessions">查看全部</button>
+            </div>
+          </div>
+          <div class="card-b tight" id="sessionList"></div>
+        </div>
+      </section>
+
+      <!-- ================= accounts ================= -->
+      <section class="page hidden" id="page-accounts">
+        <div class="card">
+          <div class="card-h">
+            <div><h2>当前登录</h2><div class="sub">读取自客户端的登录态文件（未解密，仅整份搬运）</div></div>
+            <button class="btn primary" id="btnSave">保存当前登录</button>
+          </div>
+          <div class="card-b" id="currentBox"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h">
+            <div><h2>已保存账号</h2><div class="sub" id="profileSub">切换会关闭客户端、替换登录态并重新启动</div></div>
+          </div>
+          <div class="card-b" id="profileBox"></div>
+        </div>
+
+        <div class="note">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+          <div>
+            <b>登录态会随客户端续期而变化。</b>客户端每次自动续期都会换一份新的 refresh token 并把旧的作废，
+            所以本程序会在检测到续期后，自动把最新登录态同步回对应账号的快照（只更新同一账号，不会覆盖别的账号）。
+            <br>快照只是凭据文件的副本，请不要分享 <code>profiles</code> 目录。
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="overlay hidden" id="overlay">
+  <div class="spin-box"><div class="spinner"></div><div><div class="t" id="ovT">处理中…</div><div class="d" id="ovD"></div></div></div>
+</div>
+<div class="modal-wrap hidden" id="modalWrap"><div class="modal" id="modal"></div></div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+const TOKEN = '__WB_TOKEN__';
+const ED_KEY = 'wb.keeper.edition';
+const state = { data:null, page:'sessions', edition:null, sessionsPreview:[], previewEdition:null };
+
+/* ---------- utils ---------- */
+const $ = (s,r=document)=>r.querySelector(s);
+const asArr = v => !v ? [] : (Array.isArray(v) ? v : [v]);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function fmtBytes(n){
+  n = Number(n||0);
+  if(n < 1024) return n + ' B';
+  const u = ['KB','MB','GB','TB']; let i = -1;
+  do { n = n/1024; i++; } while(n >= 1024 && i < u.length-1);
+  return (n < 10 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i];
+}
+function fmtAgo(ms){
+  if(!ms) return '—';
+  const d = Date.now() - Number(ms);
+  if(d < 60000) return '刚刚';
+  if(d < 3600000) return Math.floor(d/60000) + ' 分钟前';
+  if(d < 86400000) return Math.floor(d/3600000) + ' 小时前';
+  if(d < 86400000*30) return Math.floor(d/86400000) + ' 天前';
+  return Math.floor(d/86400000/30) + ' 个月前';
+}
+const PROD = { 'workbuddy-desktop':'国内版', 'workbuddy-desktop-ai':'国际版' };
+const prodName = p => PROD[p] || p || '未知';
+
+/* ---------- editions ---------- */
+function editions(){ return asArr(state.data && state.data.editions); }
+function curEd(){
+  const list = editions();
+  return list.find(e => e.id === state.edition) || list[0] || null;
+}
+function edName(id){ return prodName(id); }
+
+/* 昵称：本地标签，存在 data/nicknames.json，和登录态文件无关 */
+function nickLabel(product, uid, nick){
+  return nick || '';
+}
+function nickControl(product, uid, nick, opts){
+  opts = opts || {};
+  const p = esc(product), u = esc(uid);
+  if(nick){
+    return `<span class="nick-wrap" data-nick-p="${p}" data-nick-u="${u}">
+      <span class="nick" title="点击修改昵称" role="button" tabindex="0">
+        <span class="t">${esc(nick)}</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 20h4l10-10a2.5 2.5 0 0 0-3.5-3.5L4.5 16.5z"/></svg>
+      </span>
+    </span>`;
+  }
+  if(opts.readonly) return '';
+  return `<span class="nick-wrap" data-nick-p="${p}" data-nick-u="${u}">
+    <button class="nick-add" data-nick-add="1">+ 添加昵称</button>
+  </span>`;
+}
+function selectEdition(id){
+  if(!id || id === state.edition) return;
+  state.edition = id;
+  try { localStorage.setItem(ED_KEY, id); } catch(e){}
+  renderWho();
+  renderSessions();
+  renderAccounts();
+  $('#pageDesc').textContent = descFor(state.page);
+  loadPreview().then(renderSessions).catch(()=>{});
+}
+const ERR = {
+  no_login_state:'没有检测到客户端登录态，请先在 WorkBuddy 里登录',
+  workbuddy_home_missing:'找不到该版本的数据目录（.workbuddy / .workbuddy-ai）',
+  profile_missing:'该账号的登录态快照文件不存在',
+  params_required:'请求缺少必要参数',
+  unknown_edition:'未知的客户端版本，已拒绝这次账号切换',
+  manifest_missing:'备份清单缺失，这份备份可能不完整',
+  backup_missing:'备份不存在或已被删除',
+  nothing_to_recover:'没有可找回的对话',
+  no_database:'找不到对话数据库，客户端可能还没初始化过',
+  client_running:'客户端正在运行，请先完全退出',
+  process_control_disabled:'当前运行模式不允许操作客户端进程',
+  remap_failed:'对话归属改写失败，已保留原账号归属',
+  name_required:'缺少备份名称',
+  invalid_path:'路径校验失败',
+  start_timeout:'客户端启动超时，请手动打开',
+  exe_not_found:'没找到客户端可执行文件，请手动打开 WorkBuddy',
+  launcher_missing:'程序目录里找不到启动用的 .cmd 文件',
+  desktop_missing:'找不到桌面目录',
+  wscript_missing:'系统缺少创建快捷方式所需的组件'
+};
+const errText = e => ERR[e] || e || '未知错误';
+
+/* ---------- http ---------- */
+async function api(path, body, method){
+  const url = path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN);
+  const opt = { method: method || (body ? 'POST' : 'GET'), headers:{} };
+  if(body){ opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  let j;
+  try { j = await r.json(); } catch(e){ throw new Error('服务未响应'); }
+  if(!j || j.ok === false) throw new Error(j && j.error ? j.error : '请求失败');
+  return j;
+}
+function toast(msg, kind){
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind||'');
+  el.textContent = msg;
+  $('#toasts').appendChild(el);
+  setTimeout(()=>{ el.style.transition='opacity .3s'; el.style.opacity='0'; setTimeout(()=>el.remove(),320); }, kind==='err'?5200:2800);
+}
+function busy(on, title, desc){
+  $('#overlay').classList.toggle('hidden', !on);
+  if(title) $('#ovT').textContent = title;
+  $('#ovD').textContent = desc || '';
+}
+function modal(html, opts){
+  opts = opts || {};
+  $('#modal').className = 'modal' + (opts.wide ? ' wide' : '');
+  $('#modal').innerHTML = html;
+  $('#modalWrap').classList.remove('hidden');
+  $('#modalWrap').onclick = e => { if(e.target === $('#modalWrap') && !opts.locked) closeModal(); };
+  state.modalOnClose = opts.onClose || null;
+}
+function closeModal(){
+  $('#modalWrap').classList.add('hidden');
+  $('#modal').innerHTML='';
+  const cb = state.modalOnClose;
+  state.modalOnClose = null;
+  if(cb){ try { cb(); } catch(e){} }
+}
+
+const START_REASON = {
+  exe_not_found: '找不到客户端程序（可能没装，或者装在了很特殊的位置）',
+  start_timeout: '客户端启动超时',
+  process_control_disabled: '当前是调试模式，不控制客户端'
+};
+
+/* 恢复 / 找回之后的收尾：先问要不要打开客户端。
+   点「好」→ 启动客户端并刷新页面；点右上角 × （或遮罩、Esc）→ 只刷新页面，不打开客户端。 */
+function doneDialog(opts){
+  const title = opts.title || '完成';
+  const edition = opts.edition;
+  let decided = false;
+  const finish = async (open)=>{
+    if(decided) return;
+    decided = true;
+    if(open && edition){
+      busy(true, '正在打开客户端…', '启动后本页会自动刷新');
+      try {
+        const r = await api('/api/client/start', { product: edition });
+        if(!r.started){
+          busy(false);
+          decided = false;   // 允许再试一次
+          return toast('没能打开客户端：' + (START_REASON[r.reason] || r.reason || '未知原因'), 'err');
+        }
+      } catch(e){
+        busy(false);
+        decided = false;
+        return toast('没能打开客户端：' + errText(e.message), 'err');
+      }
+    }
+    location.reload();
+  };
+  const body = asArr(opts.lines).map(l=>
+    `<div style="display:flex;gap:8px;margin:6px 0"><span style="color:var(--green)">✓</span><span>${esc(l)}</span></div>`).join('');
+  modal(`<div class="modal-h"><div><h3>${esc(title)}</h3></div><button class="x" data-close title="不打开客户端">&times;</button></div>
+    <div class="modal-b">
+      ${body}
+      ${opts.note ? `<div class="note" style="margin-top:14px">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+        <div>${opts.note}</div></div>` : ''}
+      <div class="note" style="margin-top:12px">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div>点「好」会打开 <b>${esc(edition ? edName(edition) : 'WorkBuddy')}</b> 客户端，然后刷新本页；点右上角 <b>&times;</b> 只刷新本页，<b>不打开</b>客户端。</div>
+      </div>
+    </div>
+    <div class="modal-f"><button class="btn primary" id="openClient">好</button></div>`,
+    { locked:true, onClose: ()=> finish(false) });
+  $('#openClient').onclick = ()=> finish(true);
+}
+
+/* ---------- render ---------- */
+function renderWho(){
+  const list = editions();
+  if(!list.length){
+    $('#who').innerHTML = '<span class="badge n">未登录</span>';
+    return;
+  }
+  $('#who').innerHTML = list.map(e=>{
+    const on = e.id === state.edition;
+    const logged = !!e.account;
+    const acct = logged ? (e.account.nickname || e.account.uinMask || e.account.shortUid) : '未登录';
+    const title = [
+      edName(e.id),
+      logged ? ('已登录 ' + (e.account.nickname ? e.account.nickname + ' / ' : '') + (e.account.uinMask || e.account.shortUid)) : '未登录',
+      e.running ? '客户端运行中' : '客户端未运行',
+      '数据目录 ' + (e.home || '')
+    ].join(' · ');
+    return `<div class="ed ${on?'on':''}" data-ed="${esc(e.id)}" title="${esc(title)}" role="button" tabindex="0">
+      <span class="dot ${logged?'live':''}"></span>
+      <span class="edn">${esc(edName(e.id))}</span>
+      <span class="acct ${logged?'':'none'}">${esc(acct)}</span>
+      ${e.running ? '<span class="run">运行中</span>' : ''}
+    </div>`;
+  }).join('');
+}
+
+function dayBadge(days, expired, tip){
+  if(days === null || days === undefined || isNaN(days)) return '';
+  const t = tip ? ` title="${esc(tip)}"` : '';
+  if(expired || days < 0) return `<span class="badge r"${t}>已过期</span>`;
+  if(days <= 7) return `<span class="badge r"${t}>剩 ${days} 天</span>`;
+  if(days <= 20) return `<span class="badge a"${t}>剩 ${days} 天</span>`;
+  return `<span class="badge g"${t}>剩 ${days} 天</span>`;
+}
+
+/* 登录态寿命：refresh token 每续期一次就重置为「当时 + 30 天」，
+   30 天内在客户端里打开过这个号，它就一直是活的。 */
+function dayTip(p){
+  const parts = [];
+  if(p.refreshExpires) parts.push('登录态到期 ' + p.refreshExpires);
+  if(p.lastRefresh) parts.push('上次续期 ' + p.lastRefresh);
+  return parts.join(' · ');
+}
+
+function renderSessions(){
+  const d = state.data; if(!d) return;
+  const ed = curEd();
+  const s = (ed && ed.stats) || {};
+  const mineUid = ed && ed.account ? ed.account.uid : null;
+  $('#stSessions').textContent = s.total ?? '—';
+  $('#stBytes').innerHTML = fmtBytes(s.bytes) + '<small>全部对话</small>';
+  $('#stMine').textContent = s.mine ?? '—';
+  const archLnk = $('#lnkArchived');
+  if(archLnk){
+    if(s.archivedMine){
+      archLnk.textContent = `已归档 ${s.archivedMine}`;
+      archLnk.classList.remove('hidden');
+    } else {
+      archLnk.classList.add('hidden');
+    }
+  }
+  const backs = asArr(d.backups);
+  const myBacks = backs.filter(b => (b.edition || b.accountProduct) === state.edition);
+  $('#stBackups').textContent = myBacks.length;
+  const home = (ed && ed.home) || (d.paths && d.paths.workbuddyHome) || '';
+  $('#wbPath').textContent = home + '\\projects';
+  $('#backupHint').textContent = ed
+    ? `本次备份的是「${edName(ed.id)}」的对话数据库、对话文件与账号快照`
+    : '备份内容包括对话数据库、全部本地对话文件与账号快照';
+
+  const listEl = $('#sessionList');
+  const items = asArr(state.sessionsPreview);
+  if(!items.length){
+    listEl.innerHTML = `<div class="empty">
+      <svg viewBox="0 0 24 24"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h4l2 2.5h7A1.5 1.5 0 0 1 20 10v7.5A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z"/></svg>
+      <div>没有扫描到本地对话</div></div>`;
+  } else {
+    listEl.innerHTML = `<div class="row head"><div>对话</div><div class="col-size">大小</div><div class="col-time">更新</div><div class="col-path">工作目录</div><div class="col-owner" style="text-align:right">归属</div></div>` +
+      items.map(x=>{
+        const own = x.uid ? (x.uid === mineUid ? '<span class="badge b">当前账号</span>' : '<span class="badge n">其他账号</span>') : '<span class="badge n">未知</span>';
+        // 徽章必须放在 flex 的 .ttl 里：塞进 display:block 的 <b> 会掉到下一行并撑满整列
+        const tag = (x.archived ? '<span class="badge n">已归档</span>' : '')
+                  + (x.transport === 'cloud' ? '<span class="badge a">云端</span>' : '');
+        return `<div class="row item">
+          <div class="t"><div class="ttl"><b>${esc(x.title || '（无标题）')}</b>${tag}</div><span>${esc(x.id.slice(0,8))} · ${x.hasAttachments?'含工具缓存':'纯消息'}</span></div>
+          <div class="num col-size">${fmtBytes(x.bytes)}</div>
+          <div class="num col-time">${esc(fmtAgo(x.updatedMs))}</div>
+          <div class="num col-path" style="color:#6b7688">${esc(x.space||'')}</div>
+          <div class="col-owner" style="text-align:right">${own}</div>
+        </div>`;
+      }).join('');
+  }
+
+  const bl = $('#backupList');
+  const backsAll = asArr(d.backups);
+  if(!backsAll.length){
+    bl.innerHTML = `<div class="empty">
+      <svg viewBox="0 0 24 24"><path d="M4 8.5 12 4l8 4.5v7L12 20l-8-4.5z"/><path d="M4 8.5 12 13l8-4.5M12 13v7"/></svg>
+      <div>还没有备份。点右上角「立即备份」把当前对话存一份。</div></div>`;
+    return;
+  }
+  bl.innerHTML = `<div class="row head"><div>备份</div><div class="col-size">对话</div><div class="col-time">大小</div><div class="col-path">归属账号</div><div class="col-owner" style="text-align:right">操作</div></div>` +
+    backsAll.map(b=>{
+      const tag = b.auto ? `<span class="badge n">${b.tag==='pre-restore'?'恢复前自动':'自动'}</span>` : '';
+      const bEd = b.edition || b.accountProduct || '';
+      // 不是当前版本的备份：版本名标红，提醒恢复会跨版本
+      const other = bEd && bEd !== state.edition;
+      const edStyle = other ? 'color:var(--red);font-weight:600' : 'color:#98a2b3';
+      return `<div class="row item">
+        <div class="t">
+          <div class="ttl"><b>${esc(b.createdAt || b.name)}</b>${tag}</div>
+          <span>${esc(b.name)} · ${esc(fmtAgo(b.createdAtMs))} · ${b.includeAttachments?'含附件缓存':'仅消息'}</span>
+        </div>
+        <div class="num col-size">${b.sessionCount} 个</div>
+        <div class="num col-time">${fmtBytes(b.totalBytes)}</div>
+        <div class="num col-path">${b.accountUinMask? esc(b.accountUinMask) : '—'} <span style="${edStyle}">${esc(prodName(bEd))}</span></div>
+        <div class="acts col-owner">
+          <button class="btn sm" data-act="view" data-name="${esc(b.name)}">查看</button>
+          <button class="btn sm" data-act="restore" data-name="${esc(b.name)}">恢复</button>
+          <button class="btn sm danger" data-act="del" data-name="${esc(b.name)}">删除</button>
+        </div>
+      </div>`;
+    }).join('');
+}
+
+function renderAccounts(){
+  const d = state.data; if(!d) return;
+  const ed = curEd();
+  const a = ed ? ed.account : null;
+  const cur = $('#currentBox');
+  if(!ed){
+    cur.innerHTML = `<div class="empty">没有检测到任何客户端版本。</div>`;
+  } else if(!a){
+    cur.innerHTML = `<div class="empty">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:6px">${esc(edName(ed.id))} · <b style="color:var(--faint)">未登录</b></div>
+      <div>在这个版本里登录后，点右上角「保存当前登录」就能把它存下来。</div>
+      <div style="margin-top:8px;font-size:11px;color:var(--faint);word-break:break-all">登录态文件：${esc(ed.infoPath||'')}</div>
+    </div>`;
+  } else {
+    const pct = Math.max(0, Math.min(100, Math.round(((a.daysLeft||0)/30)*100)));
+    const color = (a.daysLeft < 0) ? 'var(--red)' : (a.daysLeft <= 7 ? 'var(--red)' : (a.daysLeft <= 20 ? 'var(--amber)' : 'var(--green)'));
+    cur.innerHTML = `
+      <div class="me">
+        <div class="big-av">${esc(String(a.uinMask||'--').slice(0,2))}</div>
+        <div class="info">
+          <b><span>${esc(a.uinMask || a.shortUid)}</span>
+            ${nickControl(ed.id, a.uid, a.nickname)}
+            <span class="badge b" style="margin-left:6px">${esc(edName(ed.id))}</span>
+            ${a.saved?'<span class="badge g" style="margin-left:4px">已保存</span>':'<span class="badge a" style="margin-left:4px">尚未保存</span>'}
+          </b>
+          <div class="meta">
+            <span><i>UID</i>${esc(a.uid)}</span>
+            <span><i>域名</i>${esc(a.domain||'—')}</span>
+            <span><i>数据目录</i>${esc(ed.home||'—')}</span>
+          </div>
+          <div class="meta">
+            <span><i>登录态到期</i>${esc(a.refreshExpires||'—')}</span>
+            <span><i>上次续期</i>${esc(a.lastRefresh||'—')}</span>
+            <span>${dayBadge(a.daysLeft, a.daysLeft<0, dayTip(a))}</span>
+          </div>
+          ${a.daysLeft <= 35 ? `<div class="daysbar"><i style="width:${pct}%;background:${color}"></i></div>` : ''}
+        </div>
+      </div>`;
+  }
+
+  // 账号列表按版本隔离：国内版只看到国内版的快照，国际版只看到国际版的
+  const profiles = asArr(d.profiles).filter(p=> p.product === state.edition);
+  $('#profileSub').textContent = ed
+    ? `只列出「${edName(ed.id)}」保存的账号；切换只会影响这个版本的客户端`
+    : '切换会关闭客户端、替换登录态并重新启动';
+  const box = $('#profileBox');
+  if(!profiles.length){
+    box.innerHTML = `<div class="empty">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.4"/><path d="M4.8 19.2a7.4 7.4 0 0 1 14.4 0"/></svg>
+      <div>${ed ? esc(edName(ed.id)) + ' 下还没有保存的账号。' : ''}在客户端里登录一个号后点「保存当前登录」，换号再保存一次。</div></div>`;
+    return;
+  }
+  box.innerHTML = `<div class="acct-grid">` + profiles.map(p=>`
+    <div class="acct ${p.isCurrent?'current':''}">
+      <div class="top">
+        <div>
+          <div class="name" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+            <span>${esc(p.uinMask || p.shortUid)}</span>
+            ${nickControl(p.product, p.uid, p.nickname)}
+          </div>
+          <div class="uin">${esc(p.uid)}</div>
+        </div>
+        <div class="tags">
+          ${dayBadge(p.daysLeft, p.expired, dayTip(p))}
+          ${p.isCurrent?'<span class="badge b">使用中</span>':''}
+          <span class="badge n">${esc(prodName(p.product))}</span>
+        </div>
+      </div>
+      <div class="foot">
+        <div class="meta">保存于 ${esc((p.savedAt||'').slice(5,16))} · ${fmtBytes(p.size)}</div>
+        <div class="btns">
+          <button class="btn sm danger" data-act="delacct" data-p="${esc(p.product)}" data-u="${esc(p.uid)}">删除</button>
+          <button class="btn sm ${p.isCurrent?'':'primary'}" data-act="switch" data-p="${esc(p.product)}" data-u="${esc(p.uid)}" ${p.isCurrent?'disabled':''}>${p.isCurrent?'当前账号':'切换到此账号'}</button>
+        </div>
+      </div>
+    </div>`).join('') + `</div>`;
+}
+
+function render(){
+  const d = state.data; if(!d) return;
+  $('#ver').textContent = 'v' + d.version;
+  renderWho();
+  renderSessions();
+  renderAccounts();
+  $('#pageDesc').textContent = descFor(state.page);
+}
+
+/* ---------- load ---------- */
+async function loadPreview(){
+  const ed = state.edition;
+  try {
+    const s = await api('/api/sessions?limit=8' + (ed ? '&edition=' + encodeURIComponent(ed) : ''));
+    state.sessionsPreview = asArr(s.sessions);
+    state.previewEdition = s.edition || ed;
+  } catch(e){
+    state.sessionsPreview = [];
+    state.previewEdition = ed;
+  }
+}
+
+async function load(){
+  const d = await api('/api/state');
+  // 旧版后台进程不会返回 editions，页面会看起来「全空」，这里明确提示重启
+  if(!Array.isArray(d.editions)){
+    $('#who').innerHTML = '<span class="badge n">需要重启程序</span>';
+    toast('后台还是旧版进程，请点左下角「退出程序」后重新启动对话管家', 'err');
+    state.data = d;
+    return;
+  }
+  state.data = d;
+  const list = editions();
+  const saved = (()=>{ try { return localStorage.getItem(ED_KEY); } catch(e){ return null; } })();
+  // 保持用户选中的版本；选中的版本不存在时退回后端判定的当前版本
+  if(!state.edition || !list.some(e=>e.id===state.edition)){
+    if(saved && list.some(e=>e.id===saved)) state.edition = saved;
+    else state.edition = d.activeEdition || (list[0] && list[0].id) || null;
+  }
+  await loadPreview();
+  render();
+}
+
+/* 标题旁的刷新按钮：整页重载，顺便把后台可能已经换掉的状态重新取一遍 */
+$('#btnReload').onclick = ()=> location.reload();
+
+/* 「已归档 N」：这些对话不在侧栏列表里，告诉用户去客户端哪里看 */
+document.addEventListener('click', e=>{
+  if(!e.target.closest('#lnkArchived')) return;
+  modal(`<div class="modal-h"><div><h3>已归档的对话</h3></div><button class="x" data-close>&times;</button></div>
+    <div class="modal-b">
+      <div class="note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+        <div>已归档的对话不在侧栏的普通列表里，客户端把它们收在归档区：<br>
+        在 <b>WorkBuddy</b> 内 → 点<b>左下角头像</b> → <b>设置</b> → <b>数据管理</b> → <b>归档的任务</b>，即可看到。</div>
+      </div>
+    </div>
+    <div class="modal-f"><button class="btn primary" data-close>知道了</button></div>`);
+});
+
+/* 右上角：点版本胶囊切换当前查看/操作的版本 */
+$('#who').addEventListener('click', e=>{
+  const el = e.target.closest('[data-ed]');
+  if(!el) return;
+  selectEdition(el.dataset.ed);
+});
+$('#who').addEventListener('keydown', e=>{
+  if(e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target.closest('[data-ed]');
+  if(!el) return;
+  e.preventDefault();
+  selectEdition(el.dataset.ed);
+});
+
+function descFor(p){
+  const tag = state.edition ? ('（当前：' + edName(state.edition) + '）') : '';
+  return p==='sessions'
+    ? '把本地对话整份存下来，需要时一键还原' + tag
+    : '保存登录态快照，几秒钟换一个账号，不用重新扫码' + tag;
+}
+
+/* ---------- page switch ---------- */
+function setPage(p){
+  state.page = p;
+  document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active', a.dataset.page===p));
+  $('#page-sessions').classList.toggle('hidden', p!=='sessions');
+  $('#page-accounts').classList.toggle('hidden', p!=='accounts');
+  $('#pageTitle').textContent = p==='sessions' ? '对话备份与恢复' : '账号切换';
+  $('#pageDesc').textContent = descFor(p);
+  $('#scroll').scrollTop = 0;
+}
+document.querySelectorAll('.nav a').forEach(a=> a.onclick = ()=> setPage(a.dataset.page));
+
+/* ---------- backup ---------- */
+$('#btnBackup').onclick = ()=>{
+  const ed = curEd() || {};
+  const st = ed.stats || {};
+  modal(`
+    <div class="modal-h">
+      <div><h3>备份「${esc(edName(ed.id))}」的本地对话</h3><p>会把该版本的对话数据库、全部对话文件和账号快照，整份复制到 backups 目录。</p></div>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-b">
+      <dl class="kv">
+        <dt>客户端版本</dt><dd>${esc(edName(ed.id))}</dd>
+        <dt>数据目录</dt><dd style="word-break:break-all">${esc(ed.home||'')}</dd>
+        <dt>对话数量</dt><dd>${st.total ?? 0} 个</dd>
+        <dt>数据量</dt><dd>${fmtBytes(st.bytes)}</dd>
+        <dt>存放位置</dt><dd style="word-break:break-all">${esc((state.data.paths||{}).backups||'')}</dd>
+      </dl>
+      <label class="check" style="margin-top:10px">
+        <input type="checkbox" id="cbAtt" checked>
+        <span>包含附件缓存（tool-results / subagents 等）
+          <span style="display:block;color:var(--muted);font-size:11.5px;margin-top:2px">勾选后备份更完整但体积更大；不勾选只备份消息正文，恢复时也能正常打开对话。</span>
+        </span>
+      </label>
+      ${ed.running ? `<div class="note warn" style="margin-top:12px">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div>${esc(edName(ed.id))} 客户端正在运行，数据库可能还有未落盘的事务。备份仍会成功，但要拿到最一致的快照，建议先退出这个版本的客户端再备份。</div></div>` : ''}
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>取消</button>
+      <button class="btn primary" id="doBackup">开始备份</button>
+    </div>`);
+  $('#doBackup').onclick = async ()=>{
+    const inc = $('#cbAtt').checked;
+    closeModal();
+    busy(true, '正在备份对话…', inc ? '复制数据库与全部对话文件（含附件缓存），请稍候' : '复制数据库与消息正文');
+    try{
+      const r = await api('/api/backup/create', { includeAttachments: inc, edition: state.edition });
+      await load();
+      toast('备份完成（' + edName(r.backup.edition) + '）：' + r.backup.sessionCount + ' 个对话，' + fmtBytes(r.backup.totalBytes), 'ok');
+    }catch(e){ toast('备份失败：' + errText(e.message), 'err'); }
+    finally{ busy(false); }
+  };
+};
+
+$('#btnOpenBackups').onclick = ()=> api('/api/open', { target:'backups' }).catch(()=>{});
+
+/* ---------- backup rows ---------- */
+$('#backupList').addEventListener('click', async e=>{
+  const btn = e.target.closest('button[data-act]');
+  if(!btn) return;
+  const name = btn.dataset.name;
+  const act = btn.dataset.act;
+  if(act === 'view') return viewBackup(name);
+  if(act === 'del'){
+    modal(`<div class="modal-h"><div><h3>删除这份备份？</h3><p>${esc(name)}</p></div><button class="x" data-close>&times;</button></div>
+      <div class="modal-b">备份目录会被整份删除，无法撤销。</div>
+      <div class="modal-f"><button class="btn" data-close>取消</button><button class="btn danger" id="okDel">删除</button></div>`);
+    $('#okDel').onclick = async ()=>{
+      closeModal(); busy(true, '正在删除…');
+      try{ await api('/api/backup/delete', { name }); await load(); toast('已删除', 'ok'); }
+      catch(err){ toast('删除失败：' + errText(err.message), 'err'); }
+      finally{ busy(false); }
+    };
+    return;
+  }
+  if(act === 'restore') return restoreDialog(name);
+});
+
+async function viewBackup(name){
+  busy(true, '读取备份内容…');
+  try{
+    const r = await api('/api/backup/detail?name=' + encodeURIComponent(name));
+    busy(false);
+    const list = asArr(r.sessions);
+    // counts come straight from the backup's database: the manifest only lists
+    // what the sidebar showed, so it never mentions archived or deleted ones
+    const c = r.counts || { total: list.length, archived: 0, deleted: 0 };
+    const parts = [];
+    if (c.archived) parts.push(`已归档 ${c.archived}`);
+    if (c.deleted) parts.push(`已删除 ${c.deleted}`);
+    const countText = `全部 ${c.total}` + (parts.length ? `（${parts.join('、')}）` : '');
+    modal(`
+      <div class="modal-h">
+        <div><h3>${esc(r.backup.createdAt || name)}</h3><p>${esc(name)} · ${c.total} 个对话 · ${fmtBytes(r.backup.totalBytes)}</p></div>
+        <button class="x" data-close>&times;</button>
+      </div>
+      <div class="modal-b">
+        <dl class="kv">
+          <dt>客户端版本</dt><dd>${esc(prodName(r.backup.edition))}</dd>
+          <dt>数据目录</dt><dd style="word-break:break-all">${esc(r.backup.home || '—')}</dd>
+          <dt>归属账号</dt><dd>${esc(r.backup.accountUinMask || '未知')}</dd>
+          <dt>会话数量</dt><dd>${esc(countText)}<span style="display:block;font-size:11px;color:var(--faint);margin-top:2px">这是备份里的全部对话，不区分账号</span></dd>
+          <dt>数据库</dt><dd>${r.database.hasDatabase ? '已包含' : '未包含'}${r.database.hasWal ? '（带未合并日志）' : ''}</dd>
+          <dt>文件数</dt><dd>${r.backup.fileCount}</dd>
+          <dt>附件缓存</dt><dd>${r.backup.includeAttachments ? '包含' : '未包含'}</dd>
+        </dl>
+        <div style="margin:14px 0 6px;font-size:12px;color:var(--faint)">包含的对话</div>
+        <div style="max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:10px">
+          ${list.length ? list.map(s=>`
+            <div style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line-2)">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title || '（无标题）')}</div>
+                <div style="font-size:11px;color:var(--faint)">${esc(s.space||s.slug||'')}</div>
+              </div>
+              <div style="font-size:11.5px;color:var(--muted)">${fmtBytes(s.bytes)}</div>
+            </div>`).join('') : '<div class="empty">这份备份里没有对话</div>'}
+        </div>
+      </div>
+      <div class="modal-f"><button class="btn" data-close>关闭</button></div>`, { wide:true });
+  }catch(e){ busy(false); toast('读取失败：' + errText(e.message), 'err'); }
+}
+
+/* ---------- restore ---------- */
+async function restoreDialog(name){
+  busy(true, '检查备份…');
+  let chk = { allowed:false, reason:'' }, bk = null;
+  try{
+    const r = await api('/api/backup/detail?name=' + encodeURIComponent(name));
+    bk = r.backup;
+    chk = await api('/api/backup/remap-check?name=' + encodeURIComponent(name) + (state.edition ? '&target=' + encodeURIComponent(state.edition) : '')).catch(()=>({allowed:false, reason:'error'}));
+  }catch(e){ busy(false); return toast('读取失败：' + errText(e.message), 'err'); }
+  busy(false);
+
+  const REASON = {
+    same_account:'备份与当前是同一个账号，不需要改写',
+    owner_not_found:'备份里找不到原账号的记录',
+    no_account:'缺少账号信息',
+    no_database:'备份里没有数据库文件',
+    db_unreadable:'数据库读不出来，无法改写'
+  };
+  // 恢复的目标：跨版本时写进当前选中的版本，否则回到备份自己的版本
+  const bEd = bk.edition || state.edition;
+  const bEdObj = editions().find(e=>e.id===bEd) || {};
+  const crossEdition = !!(bEd && state.edition && bEd !== state.edition);
+  const targetEd = crossEdition ? state.edition : bEd;
+  const targetObj = editions().find(e=>e.id===targetEd) || bEdObj;
+  const curAcct = targetObj.account || null;
+  const running = !!targetObj.running;
+  const diffAccount = bk.accountUid && curAcct && bk.accountUid !== curAcct.uid;
+
+  modal(`
+    <div class="modal-h">
+      <div><h3>恢复这份备份</h3><p>${esc(prodName(bEd))} · ${esc(bk.createdAt || name)} · ${bk.sessionCount} 个对话 · ${fmtBytes(bk.totalBytes)}</p></div>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-b">
+      ${crossEdition ? `<div class="note danger" style="margin-bottom:12px">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div><b>跨版本恢复：${esc(prodName(bEd))} → ${esc(prodName(targetEd))}</b><br>
+        这份备份来自 ${esc(prodName(bEd))}，将写进 ${esc(prodName(targetEd))} 的数据目录
+        <code style="font-size:11px">${esc(targetObj.home||'')}</code>。
+        两个版本的客户端可能不是同一套数据库版本，跨版本还原<b>有可能出现兼容性问题</b>（个别对话打不开、列表顺序错乱等）。<br>
+        无论选哪种方式，都会先给 ${esc(prodName(targetEd))} 的当前状态再做一份备份，恢复错了可以退回去。</div></div>` : ''}
+      <label class="opt"><input type="radio" name="rmode" value="full" checked>
+        <div><div class="o-t">完整恢复（推荐）</div>
+        <div class="o-d">把对话库回滚到备份时刻：备份之后的对话会从列表里消失。恢复前会自动给当前状态再做一份备份。</div></div></label>
+      <label class="opt"><input type="radio" name="rmode" value="merge">
+        <div><div class="o-t">仅补齐缺失</div>
+        <div class="o-d">把备份里有、这台机器上没有的对话补进来：数据库里缺的对话会插入，磁盘上缺的对话文件也会补回，已有的不覆盖、不删除。</div></div></label>
+
+      ${diffAccount ? `<div class="note" id="remapNote" style="margin-top:6px;display:${chk.allowed?'none':'block'}">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+        <div>这份备份属于 <b>${esc(bk.accountUinMask||'另一个账号')}</b>，${esc(prodName(bEd))} 当前登录的是 <b>${esc(curAcct.uinMask || curAcct.shortUid)}</b>。
+        不改写归属的话，恢复后要切回原账号才能看到这些对话。</div></div>
+        <label class="check" style="margin-top:8px">
+          <input type="checkbox" id="cbRemap" ${chk.allowed?'checked':''} ${chk.allowed?'':'disabled'}>
+          <span>把对话归属改写为当前账号
+            <span style="display:block;font-size:11.5px;margin-top:2px;color:${chk.allowed?'var(--muted)':'var(--amber)'}">
+              ${chk.allowed ? '把数据库里这些对话的归属改成当前账号（只改归属，不动内容；备份里没合并的事务日志会先自动合并）' : (REASON[chk.reason] || '当前不可用')}
+            </span>
+          </span>
+        </label>` : ''}
+
+      ${(crossEdition && !curAcct) ? `<div class="note danger" style="margin-top:10px">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+        <div>${esc(prodName(targetEd))} 当前<b>未登录</b>：恢复后既不能改写对话归属，也用不了「找回对话」。
+        建议先在 ${esc(prodName(targetEd))} 里登录一个账号，再回来恢复。</div></div>` : ''}
+
+      ${running ? `<div class="note warn" style="margin-top:12px">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div>${esc(prodName(targetEd))} 客户端正在运行，恢复前会自动关闭它，<b>完成后由你决定要不要重新打开</b>。<b>正在进行中的任务会被中断。</b></div></div>` : ''}
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>取消</button>
+      <button class="btn primary" id="doRestore">确认恢复</button>
+    </div>`);
+
+  // 只在「不改写归属」时才提醒会看不到对话；勾上改写就没这个问题了
+  const remapBox = $('#cbRemap');
+  if (remapBox) {
+    remapBox.onchange = ()=>{
+      const note = $('#remapNote');
+      if (note) note.style.display = remapBox.checked ? 'none' : 'block';
+    };
+  }
+
+  $('#doRestore').onclick = async ()=>{
+    const mode = (document.querySelector('input[name=rmode]:checked')||{}).value || 'full';
+    const remapEl = $('#cbRemap');
+    const remap = !!(remapEl && remapEl.checked && !remapEl.disabled);
+    closeModal();
+    busy(true, '正在恢复对话…', '先给当前状态做安全备份，再写回对话数据');
+    try{
+      const r = await api('/api/backup/restore', { name, mode, remap, target: state.edition });
+      busy(false);
+      const lines = [];
+      if(r.crossEdition) lines.push(`跨版本恢复：${prodName(r.sourceEdition)} → ${prodName(r.edition)}`);
+      if(r.mode === 'merge'){
+        lines.push(r.merged > 0
+          ? `已把「${edName(r.edition)}」缺的补进来：新增 ${r.merged} 个对话、${r.files} 个文件`
+          : `备份里的对话这台机器上都已经有了，没有新增（补了 ${r.files} 个文件）`);
+      } else {
+        lines.push(`已写回「${edName(r.edition)}」：${r.sessions} 个对话（${r.files} 个文件）`);
+      }
+      if(r.home) lines.push(`目标数据目录：${r.home}`);
+      if(r.preBackup) lines.push(`恢复前已自动备份为 ${r.preBackup}`);
+      if(r.remapDone) lines.push('对话归属已改写为当前账号');
+      else if(remap && r.remapReason) lines.push('归属未改写：' + (REASON[r.remapReason] || r.remapReason));
+      if(r.clientWasOpen) lines.push('客户端已关闭，等你确认后再打开');
+      // 只有「没改写归属、且备份确实属于别的账号」时，才需要提醒去点「找回对话」
+      const needFind = !r.remapDone && diffAccount;
+      doneDialog({
+        title: '恢复完成',
+        edition: r.edition,
+        lines,
+        note: needFind
+          ? '恢复完成后，归属不是当前账号的对话不会自动出现在列表里。请回到「本地对话」，点蓝色的 <b>找回对话</b>，勾选后把它们找回到当前账号。'
+          : ''
+      });
+    }catch(e){
+      busy(false);
+      toast('恢复失败：' + errText(e.message), 'err');
+    }
+  };
+}
+
+/* ---------- sessions list ---------- */
+/* ---------- recover conversations ---------- */
+$('#btnRecover').onclick = async ()=>{
+  busy(true, '扫描对话归属…');
+  let r;
+  try{
+    r = await api('/api/recover/list' + (state.edition ? '?edition=' + encodeURIComponent(state.edition) : ''));
+  }catch(e){
+    busy(false);
+    return toast('扫描失败：' + errText(e.message), 'err');
+  }
+  busy(false);
+
+  const list = asArr(r.sessions);
+  const accLabel = (r.account && (r.account.nickname || r.account.uinMask)) || '当前账号';
+
+  if(!list.length){
+    modal(`<div class="modal-h"><div><h3>找回对话</h3><p>${esc(prodName(r.edition))} · 当前账号 ${esc(accLabel)}</p></div><button class="x" data-close>&times;</button></div>
+      <div class="modal-b"><div class="empty" style="padding:34px 10px">
+        <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+        <div>所有本地对话都属于当前账号，没有需要找回的。</div>
+        ${r.cloud ? `<div style="margin-top:6px;font-size:12px;color:var(--faint)">另有 ${r.cloud} 个云端对话，归账号在服务端，本地改不了。</div>` : ''}
+        ${r.unattached ? `<div style="margin-top:6px;font-size:12px;color:var(--faint)">另有 ${r.unattached} 个对话文件没有数据库记录，无法确定归属。</div>` : ''}
+      </div></div>
+      <div class="modal-f"><button class="btn primary" data-close>好</button></div>`);
+    return;
+  }
+
+  // 按来源账号分组
+  const groups = {};
+  const order = [];
+  list.forEach(s=>{
+    if(!groups[s.uid]){ groups[s.uid] = []; order.push(s.uid); }
+    groups[s.uid].push(s);
+  });
+
+  const stateTag = s => s.state === 'archived' ? '<span class="badge n">已归档</span>'
+                     : (s.state === 'deleted' ? '<span class="badge r">已删除</span>' : '');
+  const defCount = list.filter(s=> s.defaultOn !== false).length;
+
+  const groupsHtml = order.map(uid=>{
+    const arr = groups[uid];
+    const f = arr[0];
+    const label = f.mine
+      ? ('当前账号 · ' + (f.nickname || f.shortUid || uid.slice(0,8)))
+      : (f.nickname ? (f.nickname + ' · ' + f.shortUid) : (f.shortUid || uid.slice(0,8)));
+    const on = arr.filter(s=> s.defaultOn !== false).length;
+    return `<div class="rec-group">
+      <div class="rec-group-h">
+        <input type="checkbox" data-grp="${esc(uid)}" ${on===arr.length?'checked':(on>0?'data-half="1"':'')}>
+        <span class="who2">${esc(label)}</span>
+        <span class="cnt">${arr.length} 个对话</span>
+      </div>
+      <div class="rec-scroll">
+        ${arr.map(s=>`<label class="rec-item">
+          <input type="checkbox" ${s.defaultOn === false ? '' : 'checked'} data-rec="${esc(s.id)}" data-of="${esc(uid)}">
+          <span class="tt" title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</span>
+          ${stateTag(s)}
+          <span class="sz">${fmtBytes(s.bytes)}</span>
+        </label>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  modal(`
+    <div class="modal-h">
+      <div><h3>找回对话</h3><p>${esc(prodName(r.edition))} · 当前账号 ${esc(accLabel)} · 共 ${list.length} 个可找回${r.archived?`（其中 ${r.archived} 个已归档）`:''}${r.deleted?`（其中 ${r.deleted} 个已删除）`:''}</p></div>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-b">
+      <label class="check" style="margin-bottom:12px">
+        <input type="checkbox" id="cbRecoverBackup" checked>
+        <span>找回前备份</span>
+      </label>
+      <div class="note" style="margin-bottom:12px">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+        <div>勾选的对话会被<b>改写为当前账号</b>（${esc(accLabel)}），之后就能在侧栏看到。
+        已归档的找回后<b>仍然是归档状态</b>；已删除的找回后会<b>取消删除状态</b>，重新出现在列表里。
+        处理前会自动关闭客户端；完成后由你决定要不要打开客户端。</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--faint)">已选 <b id="recCount" style="color:var(--accent)">${defCount}</b> / ${list.length}</span>
+        <button class="btn sm ghost" id="recAll" style="margin-left:auto">全选</button>
+        <button class="btn sm ghost" id="recNone">全不选</button>
+      </div>
+      ${groupsHtml}
+      ${r.cloud ? `<div style="font-size:11.5px;color:var(--faint);margin-top:4px">另有 ${r.cloud} 个云端对话的归属在服务端，本地无法改写。</div>` : ''}
+      ${r.unattached ? `<div style="font-size:11.5px;color:var(--faint);margin-top:4px">另有 ${r.unattached} 个对话文件没有数据库记录，不在列表里。</div>` : ''}
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>取消</button>
+      <button class="btn primary" id="doRecover">找回选中的对话</button>
+    </div>`);
+
+  // 组头勾选框要反映「默认只勾了活着的那些」
+  document.querySelectorAll('input[data-half]').forEach(g=>{ g.indeterminate = true; });
+
+  const boxes = ()=> Array.from(document.querySelectorAll('input[data-rec]'));
+  const syncCount = ()=>{
+    const n = boxes().filter(b=>b.checked).length;
+    const el = $('#recCount'); if(el) el.textContent = n;
+    document.querySelectorAll('input[data-grp]').forEach(g=>{
+      const kids = boxes().filter(b=>b.dataset.of === g.dataset.grp);
+      const on = kids.filter(b=>b.checked).length;
+      g.checked = on === kids.length;
+      g.indeterminate = on > 0 && on < kids.length;
+    });
+    const btn = $('#doRecover');
+    if(btn) btn.disabled = n === 0;
+  };
+
+  document.querySelectorAll('input[data-grp]').forEach(g=>{
+    g.onchange = ()=>{
+      boxes().filter(b=>b.dataset.of === g.dataset.grp).forEach(b=>{ b.checked = g.checked; });
+      syncCount();
+    };
+  });
+  boxes().forEach(b=> b.onchange = syncCount);
+  $('#recAll').onclick = ()=>{ boxes().forEach(b=>b.checked = true); syncCount(); };
+  $('#recNone').onclick = ()=>{ boxes().forEach(b=>b.checked = false); syncCount(); };
+
+  $('#doRecover').onclick = async ()=>{
+    const ids = boxes().filter(b=>b.checked).map(b=>b.dataset.rec);
+    if(!ids.length) return;
+    const cbBackup = $('#cbRecoverBackup');
+    const doBackup = !(cbBackup && !cbBackup.checked);
+    closeModal();
+    busy(true, '正在找回对话…', doBackup ? '备份数据库 → 关闭客户端 → 改写归属 → 合并事务日志' : '关闭客户端 → 改写归属 → 合并事务日志');
+    try{
+      const res = await api('/api/recover/apply', { edition: state.edition, ids, backup: doBackup });
+      busy(false);
+      const lines = [];
+      lines.push(`已把 ${res.recovered} 个对话找回到当前账号`);
+      if(res.undeleted) lines.push(`其中 ${res.undeleted} 个已取消删除状态`);
+      if(asArr(res.missed).length) lines.push(`${asArr(res.missed).length} 个对话没有改成，已跳过`);
+      if(res.snapshot) lines.push(`找回前的完整备份已存好：${res.snapshot}`);
+      if(res.wasRunning) lines.push('客户端已关闭，等你确认后再打开');
+      doneDialog({
+        title: '找回完成',
+        edition: res.edition || state.edition,
+        lines,
+        note: '等客户端启动完成，这些对话就会出现在侧栏里。'
+      });
+    }catch(e){
+      busy(false);
+      toast('找回失败：' + errText(e.message), 'err');
+    }
+  };
+};
+
+$('#btnAllSessions').onclick = async ()=>{
+  busy(true, '读取对话列表…');
+  try{
+    const r = await api('/api/sessions?limit=300' + (state.edition ? '&edition=' + encodeURIComponent(state.edition) : ''));
+    busy(false);
+    const list = asArr(r.sessions);
+    modal(`
+      <div class="modal-h"><div><h3>本地对话（${list.length}/${r.total}）</h3><p>${esc(prodName(r.edition || state.edition))} · 按最近活动排序</p></div><button class="x" data-close>&times;</button></div>
+      <div class="modal-b" style="padding-bottom:14px">
+        <input id="q" placeholder="搜索标题 / 路径" style="width:100%;height:34px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:13px;font-family:inherit;outline:none;margin-bottom:10px">
+        <div id="sessBox" style="max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px"></div>
+      </div>
+      <div class="modal-f"><button class="btn" data-close>关闭</button></div>`, { wide:true });
+    const paint = (kw)=>{
+      const f = list.filter(s=> !kw || (s.title||'').toLowerCase().includes(kw) || (s.space||'').toLowerCase().includes(kw));
+      $('#sessBox').innerHTML = f.length ? f.map(s=>`
+        <div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line-2)">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title||'（无标题）')}</div>
+            <div style="font-size:11px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.space||s.slug)}</div>
+          </div>
+          <div style="font-size:11.5px;color:var(--muted);text-align:right;white-space:nowrap">${fmtBytes(s.bytes)}<br><span style="color:var(--faint)">${esc(fmtAgo(s.updatedMs))}</span></div>
+        </div>`).join('') : '<div class="empty">没有匹配的对话</div>';
+    };
+    paint('');
+    $('#q').oninput = e => paint(e.target.value.trim().toLowerCase());
+  }catch(e){ busy(false); toast('读取失败：' + errText(e.message), 'err'); }
+};
+
+/* ---------- accounts ---------- */
+$('#btnSave').onclick = async ()=>{
+  busy(true, '保存登录态…', state.edition ? edName(state.edition) : '');
+  try{
+    const r = await api('/api/accounts/save', { edition: state.edition });
+    await load();
+    const n = asArr(r.saved).length;
+    const names = asArr(r.saved).map(x=> prodName(x.product)).join('、');
+    toast(n ? ('已保存 ' + names + ' 的登录态') : '已保存', 'ok');
+  }catch(e){ toast('保存失败：' + errText(e.message), 'err'); }
+  finally{ busy(false); }
+};
+
+/* ---------- nickname editor ---------- */
+function openNickEditor(wrap, current){
+  if(wrap.querySelector('.nick-input')) return;
+  const product = wrap.dataset.nickP;
+  const uid = wrap.dataset.nickU;
+  const html = wrap.innerHTML;
+  wrap.innerHTML = `<input class="nick-input" maxlength="24" placeholder="输入昵称" value="${esc(current||'')}">`;
+  const inp = wrap.querySelector('.nick-input');
+  inp.focus();
+  inp.select();
+
+  let finished = false;
+  const back = ()=>{ if(!finished){ finished = true; wrap.innerHTML = html; } };
+  const commit = async ()=>{
+    if(finished) return;
+    finished = true;
+    const v = inp.value.trim();
+    try{
+      await api('/api/accounts/nickname', { product, uid, nickname: v });
+      await load();
+      toast(v ? ('昵称已设为「' + v + '」') : '昵称已清除', 'ok');
+    }catch(err){
+      wrap.innerHTML = html;
+      toast('保存昵称失败：' + errText(err.message), 'err');
+    }
+  };
+
+  inp.addEventListener('keydown', ev=>{
+    if(ev.key === 'Enter'){ ev.preventDefault(); commit(); }
+    else if(ev.key === 'Escape'){ ev.preventDefault(); back(); }
+  });
+  inp.addEventListener('blur', ()=> commit());
+}
+
+document.addEventListener('click', e=>{
+  const wrap = e.target.closest('.nick-wrap');
+  if(!wrap) return;
+  if(wrap.querySelector('.nick-input')) return;
+  const isAdd = !!e.target.closest('[data-nick-add]');
+  const chip = e.target.closest('.nick');
+  if(!isAdd && !chip) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const cur = chip ? (chip.querySelector('.t') ? chip.querySelector('.t').textContent : '') : '';
+  openNickEditor(wrap, cur);
+}, true);
+
+$('#profileBox').addEventListener('click', e=>{
+  const btn = e.target.closest('button[data-act]');
+  if(!btn) return;
+  const { act, p, u } = btn.dataset;
+  if(act === 'delacct'){
+    modal(`<div class="modal-h"><div><h3>删除这个账号快照？</h3><p>${esc(u)}</p></div><button class="x" data-close>&times;</button></div>
+      <div class="modal-b">只删除本程序保存的登录态副本，不影响客户端里已经登录的账号。</div>
+      <div class="modal-f"><button class="btn" data-close>取消</button><button class="btn danger" id="okDelAcct">删除</button></div>`);
+    $('#okDelAcct').onclick = async ()=>{
+      closeModal(); busy(true, '删除中…');
+      try{ await api('/api/accounts/delete', { product:p, uid:u }); await load(); toast('已删除', 'ok'); }
+      catch(err){ toast('删除失败：' + errText(err.message), 'err'); }
+      finally{ busy(false); }
+    };
+    return;
+  }
+  if(act === 'switch'){
+    const prof = asArr(state.data.profiles).find(x=> x.uid===u && x.product===p) || {};
+    const edObj = editions().find(e=>e.id===p) || {};
+    const running = !!edObj.running;
+    modal(`<div class="modal-h"><div><h3>切换到 ${esc(prof.nickname || prof.uinMask || u.slice(0,8))}？</h3><p>${esc(prodName(p))} · 登录态剩余 ${prof.daysLeft>=0?prof.daysLeft+' 天':'已过期'}</p></div><button class="x" data-close>&times;</button></div>
+      <div class="modal-b">
+        <div style="display:flex;gap:8px;margin:4px 0 8px"><span>1</span><span>把「${esc(prodName(p))}」当前账号的登录态存进快照（不会丢 token）</span></div>
+        <div style="display:flex;gap:8px;margin:4px 0 8px"><span>2</span><span>关闭 ${esc(prodName(p))} 客户端（另一个版本不受影响）</span></div>
+        <div style="display:flex;gap:8px;margin:4px 0 8px"><span>3</span><span>写入目标账号的登录态并重新启动 ${esc(prodName(p))} 客户端</span></div>
+        ${running ? `<div class="note warn" style="margin-top:12px">
+          <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+          <div>客户端正在运行，切换会关闭它，<b>正在进行中的任务会被中断</b>。</div></div>` : ''}
+        ${prof.expired ? `<div class="note warn" style="margin-top:10px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v4l3 2"/></svg><div>这个快照的 refresh token 已过期，切换后可能需要重新登录。</div></div>` : ''}
+      </div>
+      <div class="modal-f"><button class="btn" data-close>取消</button><button class="btn primary" id="doSwitch">切换并重启</button></div>`);
+    $('#doSwitch').onclick = async ()=>{
+      closeModal();
+      busy(true, '正在切换账号…', '关闭客户端 → 替换登录态 → 重新启动');
+      try{
+        const r = await api('/api/accounts/switch', { product:p, uid:u });
+        await load().catch(()=>{});
+        busy(false);
+        if(r.restarted) toast('已切换到 ' + (r.uinMask||u.slice(0,8)) + '，客户端正在启动', 'ok');
+        else toast('登录态已替换，但客户端没能自动启动：' + errText(r.reason), 'err');
+      }catch(e){
+        busy(false);
+        toast('切换失败：' + errText(e.message), 'err');
+      }
+    };
+  }
+});
+
+/* ---------- misc ---------- */
+$('#btnShortcut').onclick = async ()=>{
+  try{
+    const r = await api('/api/shortcut/create', {});
+    modal(`<div class="modal-h"><div><h3>桌面图标已创建</h3></div><button class="x" data-close>&times;</button></div>
+      <div class="modal-b">
+        <div class="note">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.6-4.8"/></svg>
+          <div>桌面上已经建好 <b>${esc(r.name)}</b>，以后双击它就能打开对话管家。<br>
+          <span style="color:var(--faint);word-break:break-all">${esc(r.path)}</span></div>
+        </div>
+        ${r.existed ? '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">桌面上原来就有同名图标，已经更新为当前程序的路径。</div>' : ''}
+      </div>
+      <div class="modal-f"><button class="btn primary" data-close>好</button></div>`);
+  }catch(e){
+    toast('创建失败：' + errText(e.message), 'err');
+  }
+};
+
+$('#btnQuit').onclick = async ()=>{
+  modal(`<div class="modal-h"><div><h3>退出对话管家？</h3></div><button class="x" data-close>&times;</button></div>
+    <div class="modal-b">只关闭这个小工具，不影响 WorkBuddy 客户端。</div>
+    <div class="modal-f"><button class="btn" data-close>取消</button><button class="btn primary" id="okQuit">退出</button></div>`);
+  $('#okQuit').onclick = async ()=>{ closeModal(); try{ await api('/api/quit', {}); }catch(e){} setTimeout(()=>window.close(), 200); };
+};
+
+$('#modalWrap').addEventListener('click', e=>{
+  if(e.target.closest('[data-close]')) closeModal();
+});
+document.addEventListener('keydown', e=>{ if(e.key === 'Escape') closeModal(); });
+
+setInterval(()=>{ fetch('/api/ping?t=' + encodeURIComponent(TOKEN)).catch(()=>{}); }, 3000);
+
+load().catch(e=> toast('无法连接本地服务：' + e.message, 'err'));
+
+// 只在窗口重新获得焦点时静默刷新，避免列表在用户点击时重绘
+window.addEventListener('focus', ()=>{ load().catch(()=>{}); });
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load().catch(()=>{}); });
+</script>
+</body>
+</html>
