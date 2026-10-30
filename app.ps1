@@ -1,5 +1,5 @@
 <#
-  WorkBuddy Keeper 1.3.4
+  WorkBuddy Keeper 1.3.7
   Session backup / restore + account switch for the WorkBuddy desktop client.
   Supports both editions (China and international) side by side.
 
@@ -35,7 +35,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$AppVersion = '1.3.4'
+$AppVersion = '1.3.7'
 
 # --------------------------------------------------------------------------
 # paths
@@ -2288,6 +2288,17 @@ function Invoke-Api([string]$path, $query, $req) {
             return [pscustomobject]@{ ok = $true; edition = $product; started = $r.started; exe = $r.exe; reason = [string]$r.reason }
         }
 
+        '/api/client/restart' {
+            $product = Get-ActiveEdition
+            if ($body -and $body.product) { $product = [string]$body.product }
+            if (-not (Test-Edition $product)) { $product = Get-ActiveEdition }
+            # stop first: launching a second instance just focuses the running one,
+            # it does not restart it
+            $stopped = Stop-Client (Get-ProductProc $product)
+            $r = Start-Client $product
+            return [pscustomobject]@{ ok = $true; edition = $product; stopped = $stopped; started = $r.started; exe = $r.exe; reason = [string]$r.reason }
+        }
+
         '/api/open' {
             $target = 'root'
             if ($body -and $body.target) { $target = [string]$body.target }
@@ -2434,10 +2445,26 @@ public static class WbWin
     static extern int GetWindowText(IntPtr hWnd, StringBuilder s, int max);
     [DllImport("user32.dll")]
     static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")]
+    static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")]
+    static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentThreadId();
 
-    public static bool AnyWindowWithTitle(string needle)
+    public static IntPtr FindWindowByTitle(string needle)
     {
-        bool found = false;
+        IntPtr found = IntPtr.Zero;
         EnumWindows(delegate(IntPtr h, IntPtr l)
         {
             if (!IsWindowVisible(h)) return true;
@@ -2447,12 +2474,55 @@ public static class WbWin
             GetWindowText(h, sb, sb.Capacity);
             if (sb.ToString().IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                found = true;
+                found = h;
                 return false;
             }
             return true;
         }, IntPtr.Zero);
         return found;
+    }
+
+    public static bool AnyWindowWithTitle(string needle)
+    {
+        return FindWindowByTitle(needle) != IntPtr.Zero;
+    }
+
+    public static uint GetWindowPid(IntPtr h)
+    {
+        uint pid;
+        GetWindowThreadProcessId(h, out pid);
+        return pid;
+    }
+
+    public static bool CloseWindow(IntPtr h)
+    {
+        if (h == IntPtr.Zero) return false;
+        return PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero);   // WM_CLOSE
+    }
+
+    public static bool BringToFront(IntPtr h)
+    {
+        if (h == IntPtr.Zero) return false;
+        ShowWindow(h, 9);                       // SW_RESTORE, in case it is minimised
+        if (SetForegroundWindow(h)) return true;
+
+        // Windows refuses SetForegroundWindow when the caller is not already the
+        // foreground process (our process has no window at all). Attaching to the
+        // current foreground thread lifts that restriction.
+        IntPtr fg = GetForegroundWindow();
+        uint fgPid;
+        uint fgThread = GetWindowThreadProcessId(fg, out fgPid);
+        uint me = GetCurrentThreadId();
+        bool attached = false;
+        if (fgThread != 0 && fgThread != me) attached = AttachThreadInput(me, fgThread, true);
+        bool ok = SetForegroundWindow(h);
+        if (attached) AttachThreadInput(me, fgThread, false);
+        if (!ok)
+        {
+            SwitchToThisWindow(h, true);        // last resort, more permissive
+            ok = true;
+        }
+        return ok;
     }
 }
 '@
@@ -2467,6 +2537,58 @@ function Test-AppWindowAlive {
     } catch {
         return $true    # never kill the session over a probe failure
     }
+}
+
+function Get-AppWindowHandle {
+    # IntPtr.Zero = no such window; $null = the probe itself is unavailable
+    try {
+        Initialize-WindowProbe
+        return [WbWin]::FindWindowByTitle($script:WindowTitle)
+    } catch {
+        return $null
+    }
+}
+
+function Focus-AppWindow {
+    $h = Get-AppWindowHandle
+    if ($null -eq $h -or $h -eq [IntPtr]::Zero) { return $false }
+    try { return [WbWin]::BringToFront($h) } catch { return $false }
+}
+
+function Test-OurBrowserWindow([IntPtr]$h) {
+    # Only windows opened by the private browser profile we create are safe to
+    # close. If the user happens to have the page in an ordinary tab, closing that
+    # window would take all their other tabs with it - so check the owner first.
+    try {
+        $procId = [WbWin]::GetWindowPid($h)
+        if ($procId -le 0) { return $false }
+        $p = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $procId) -ErrorAction SilentlyContinue
+        if (-not $p -or -not $p.CommandLine) { return $false }
+        $profileDir = Join-Path $DataDir 'window-profile'
+        return ($p.CommandLine.IndexOf($profileDir, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+    } catch {
+        return $false
+    }
+}
+
+function Close-AppWindow {
+    # A window whose backend is gone is just a broken page; close it so the new
+    # launch does not end up with two windows.
+    $h = Get-AppWindowHandle
+    if ($null -eq $h -or $h -eq [IntPtr]::Zero) { return $false }
+    if (-not (Test-OurBrowserWindow $h)) {
+        Write-Log 'stale window does not belong to our browser profile; leaving it open'
+        return $false
+    }
+    try { [void][WbWin]::CloseWindow($h) } catch { return $false }
+    $deadline = (Get-Date).AddSeconds(3)
+    while ((Get-Date) -lt $deadline) {
+        if ($null -eq (Get-AppWindowHandle)) { break }
+        $now = Get-AppWindowHandle
+        if ($null -eq $now -or $now -eq [IntPtr]::Zero) { break }
+        Start-Sleep -Milliseconds 150
+    }
+    return $true
 }
 
 function Start-AppWindow([string]$url) {
@@ -2508,6 +2630,32 @@ function Test-PortOpen([int]$p) {
         $c.Close()
         return $true
     } catch { return $false }
+}
+
+function Stop-StaleBackend($inst) {
+    # A backend whose window is gone is a leftover: the window was closed but the
+    # process never noticed (browser killed, crash, sleep/resume). Take it down so
+    # the new launch can own the port and the instance file.
+    if (-not $inst) { return $false }
+    $procId = 0
+    try { $procId = [int]$inst.pid } catch { }
+    if ($procId -le 0) { return $false }
+
+    # never kill a recycled pid: make sure that process is still our script
+    $p = $null
+    try { $p = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $procId) -ErrorAction SilentlyContinue } catch { }
+    if (-not $p) { return $false }
+    if (-not $p.CommandLine -or $p.CommandLine -notmatch 'app\.ps1') { return $false }
+
+    Write-Log ("stopping stale backend: pid={0} port={1}" -f $procId, $inst.port)
+    try { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue } catch { }
+
+    $deadline = (Get-Date).AddSeconds(6)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-PortOpen ([int]$inst.port))) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    return $true
 }
 
 function New-AppIcon {
@@ -2625,24 +2773,46 @@ function New-DesktopShortcut {
 # main
 # --------------------------------------------------------------------------
 $existing = Read-JsonFile $script:InstancePath
-$reusable = $false
+$serving = $false
 if ($existing -and $existing.port -and $existing.token) {
-    if (Test-PortOpen ([int]$existing.port)) { $reusable = $true }
-}
-if ($reusable -and -not $Port) {
-    $u = "http://127.0.0.1:$($existing.port)/?t=$($existing.token)&reuse=1"
-    [void](Start-AppWindow $u)
-    exit 0
+    if (Test-PortOpen ([int]$existing.port)) { $serving = $true }
 }
 
-# If another instance is already serving, leave its instance.json / url.txt alone.
-# Writing them here would point the launcher at this process and orphan the window
-# the user already has open - and that other instance would then find its own
-# record gone when it quits.
+# What a second double-click should do depends on what is actually still there:
+#
+#   serving + window   -> do nothing new, just raise the window we already have
+#   serving, no window -> leftover; take it down and start properly
+#   not serving        -> any process still holding the record is a zombie, clear it
+#   nothing at all     -> normal start
+#
+# instance.json / url.txt are only written by whoever ends up owning the instance.
 $script:OwnsInstance = $true
-if ($reusable) {
-    $script:OwnsInstance = $false
-    Write-Log ("another instance is serving on port {0}; not touching instance.json" -f [int]$existing.port)
+if ($Port) {
+    # explicit port (tests, side-by-side runs): leave any other instance alone
+    if ($serving) {
+        $script:OwnsInstance = $false
+        Write-Log ("another instance is serving on port {0}; not touching instance.json" -f [int]$existing.port)
+    }
+} else {
+    $h = Get-AppWindowHandle
+    $hasWin = ($null -ne $h -and $h -ne [IntPtr]::Zero)
+    if ($serving) {
+        if ($hasWin) {
+            Write-Log 'duplicate launch: window already open, bringing it to front'
+            [void](Focus-AppWindow)
+            exit 0
+        }
+        Write-Log ("backend on port {0} is serving but has no window; taking it down" -f [int]$existing.port)
+        [void](Stop-StaleBackend $existing)
+    } else {
+        # nothing is serving: a lingering process and an orphan window are both
+        # dead weight - clear them so we start from a clean slate
+        if ($existing) { [void](Stop-StaleBackend $existing) }
+        if ($hasWin) {
+            Write-Log 'window without backend: closing it, then starting fresh'
+            [void](Close-AppWindow)
+        }
+    }
 }
 
 $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)

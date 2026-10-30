@@ -383,7 +383,10 @@
         <div class="card">
           <div class="card-h">
             <div><h2>当前登录</h2><div class="sub">读取自客户端的登录态文件（未解密，仅整份搬运）</div></div>
-            <button class="btn primary" id="btnSave">保存当前登录</button>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="btnOpenClient">打开客户端</button>
+              <button class="btn primary" id="btnSave">保存当前登录</button>
+            </div>
           </div>
           <div class="card-b" id="currentBox"></div>
         </div>
@@ -722,6 +725,12 @@ function renderAccounts(){
   const d = state.data; if(!d) return;
   const ed = curEd();
   const a = ed ? ed.account : null;
+  // 客户端在跑的时候，这个按钮变成「重启客户端」
+  const oc = $('#btnOpenClient');
+  if(oc){
+    oc.textContent = (ed && ed.running) ? '重启客户端' : '打开客户端';
+    oc.disabled = !ed;
+  }
   const cur = $('#currentBox');
   if(!ed){
     cur.innerHTML = `<div class="empty">没有检测到任何客户端版本。</div>`;
@@ -1305,6 +1314,21 @@ $('#btnAllSessions').onclick = async ()=>{
 };
 
 /* ---------- accounts ---------- */
+$('#btnOpenClient').onclick = async ()=>{
+  const ed = curEd();
+  if(!ed) return toast('没有检测到客户端版本', 'err');
+  const restart = !!ed.running;
+  busy(true, restart ? '正在重启客户端…' : '正在打开客户端…',
+       restart ? '关闭 → 重新启动' : ('启动 ' + prodName(ed.id)));
+  try{
+    const r = await api(restart ? '/api/client/restart' : '/api/client/start', { product: ed.id });
+    if(!r.started){ toast('没能启动：' + errText(r.reason || 'start_timeout'), 'err'); return; }
+    toast(restart ? '已重启客户端' : '已打开客户端', 'ok');
+    await load();
+  }catch(e){ toast('操作失败：' + errText(e.message), 'err'); }
+  finally{ busy(false); }
+};
+
 $('#btnSave').onclick = async ()=>{
   busy(true, '保存登录态…', state.edition ? edName(state.edition) : '');
   try{
