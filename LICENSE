@@ -1,3 +1,5 @@
+木兰宽松许可证, 第2版
+
 木兰宽松许可证， 第2版
 
 2020年1月 http://license.coscl.org.cn/MulanPSL2
@@ -65,8 +67,8 @@
 
 3， 请将如下声明文本放入每个源文件的头部注释中。
 
-Copyright (c) 2026 batvbs
-WorkBuddy History Keeper is licensed under Mulan PSL v2.
+Copyright (c) [Year] [name of copyright holder]
+[Software Name] is licensed under Mulan PSL v2.
 You can use this software according to the terms and conditions of the Mulan
 PSL v2.
 You may obtain a copy of Mulan PSL v2 at:
@@ -178,8 +180,8 @@ License in the first directory of your software package;
 iii. Attach the statement to the appropriate annotated syntax at the
 beginning of each source file.
 
-Copyright (c) 2026 batvbs
-WorkBuddy History Keeper is licensed under Mulan PSL v2.
+Copyright (c) [Year] [name of copyright holder]
+[Software Name] is licensed under Mulan PSL v2.
 You can use this software according to the terms and conditions of the Mulan
 PSL v2.
 You may obtain a copy of Mulan PSL v2 at:
