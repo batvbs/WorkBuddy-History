@@ -262,7 +262,11 @@
   .modal-h p{margin:5px 0 0;font-size:12px;color:var(--muted);line-height:1.6}
   .modal-b{padding:4px 20px 8px;overflow-y:auto;font-size:13px;line-height:1.75;color:#39435a}
   .modal-f{padding:14px 20px 18px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--line-2);margin-top:8px}
-  .x{background:none;border:0;cursor:pointer;color:var(--faint);padding:4px;border-radius:6px;line-height:0}
+  .x{background:#f4f6fa;border:1px solid #e2e8f1;cursor:pointer;color:#c0392b;
+     width:30px;height:30px;padding:0;border-radius:8px;line-height:1;font-size:21px;font-weight:600;
+     display:inline-flex;align-items:center;justify-content:center;transition:.12s;flex:0 0 30px}
+  .x:hover{background:var(--red-soft);border-color:#f2c7c7;color:#b03030}
+  .x:active{transform:scale(.94)}
   .x:hover{background:#f1f4f9;color:var(--text)}
   .opt{display:flex;gap:10px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;cursor:pointer;margin-bottom:8px;align-items:flex-start}
   .opt:hover{border-color:#d3dcea;background:#fbfcfe}
@@ -384,6 +388,7 @@
           <div class="card-h">
             <div><h2>当前登录</h2><div class="sub">读取自客户端的登录态文件（未解密，仅整份搬运）</div></div>
             <div style="display:flex;gap:8px">
+              <button class="btn" id="btnNewAccount">登录新账号</button>
               <button class="btn" id="btnOpenClient">打开客户端</button>
               <button class="btn primary" id="btnSave">保存当前登录</button>
             </div>
@@ -501,9 +506,12 @@ const ERR = {
   invalid_path:'路径校验失败',
   start_timeout:'客户端启动超时，请手动打开',
   exe_not_found:'没找到客户端可执行文件，请手动打开 WorkBuddy',
-  launcher_missing:'程序目录里找不到启动用的 .cmd 文件',
+  launcher_missing:'程序目录里找不到启动用的 .vbs / .cmd 文件',
   desktop_missing:'找不到桌面目录',
-  wscript_missing:'系统缺少创建快捷方式所需的组件'
+  wscript_missing:'系统缺少创建快捷方式所需的组件',
+  not_logged_in:'当前没有登录账号',
+  logout_failed:'清空登录态失败',
+  save_before_logout_failed:'没能先保存当前账号的登录态，已中止（没有清空任何东西）'
 };
 const errText = e => ERR[e] || e || '未知错误';
 
@@ -725,11 +733,16 @@ function renderAccounts(){
   const d = state.data; if(!d) return;
   const ed = curEd();
   const a = ed ? ed.account : null;
-  // 客户端在跑的时候，这个按钮变成「重启客户端」
+  // 客户端在跑的时候，这个按钮变成「关闭客户端」
   const oc = $('#btnOpenClient');
   if(oc){
-    oc.textContent = (ed && ed.running) ? '重启客户端' : '打开客户端';
+    oc.textContent = (ed && ed.running) ? '关闭客户端' : '打开客户端';
     oc.disabled = !ed;
+  }
+  const na = $('#btnNewAccount');
+  if(na){
+    na.disabled = !ed || !a;
+    na.title = (ed && a) ? '' : '需要先登录一个账号';
   }
   const cur = $('#currentBox');
   if(!ed){
@@ -1314,19 +1327,47 @@ $('#btnAllSessions').onclick = async ()=>{
 };
 
 /* ---------- accounts ---------- */
-$('#btnOpenClient').onclick = async ()=>{
-  const ed = curEd();
-  if(!ed) return toast('没有检测到客户端版本', 'err');
-  const restart = !!ed.running;
-  busy(true, restart ? '正在重启客户端…' : '正在打开客户端…',
-       restart ? '关闭 → 重新启动' : ('启动 ' + prodName(ed.id)));
+async function startClient(ed){
+  busy(true, '正在打开客户端…', '启动 ' + prodName(ed.id));
   try{
-    const r = await api(restart ? '/api/client/restart' : '/api/client/start', { product: ed.id });
+    const r = await api('/api/client/start', { product: ed.id });
     if(!r.started){ toast('没能启动：' + errText(r.reason || 'start_timeout'), 'err'); return; }
-    toast(restart ? '已重启客户端' : '已打开客户端', 'ok');
+    toast('已打开客户端', 'ok');
     await load();
   }catch(e){ toast('操作失败：' + errText(e.message), 'err'); }
   finally{ busy(false); }
+}
+
+async function stopClient(ed){
+  closeModal();
+  busy(true, '正在关闭客户端…', '关闭 ' + prodName(ed.id));
+  try{
+    await api('/api/client/stop', { product: ed.id });
+    toast('已关闭客户端', 'ok');
+    await load();
+  }catch(e){ toast('关闭失败：' + errText(e.message), 'err'); }
+  finally{ busy(false); }
+}
+
+$('#btnOpenClient').onclick = ()=>{
+  const ed = curEd();
+  if(!ed) return toast('没有检测到客户端版本', 'err');
+  if(!ed.running) return startClient(ed);
+  modal(`<div class="modal-h"><div><h3>关闭客户端？</h3><p>${esc(prodName(ed.id))}</p></div><button class="x" data-close>&times;</button></div>
+    <div class="modal-b">
+      <div class="note warn">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div>客户端正在运行，退出会关闭它，<b>正在进行中的任务会被中断</b>。</div>
+      </div>
+    </div>
+    <div class="modal-f"><button class="btn primary" id="doStopClient">关闭客户端</button></div>`);
+  $('#doStopClient').onclick = ()=> stopClient(ed);
+};
+
+$('#btnNewAccount').onclick = ()=>{
+  const ed = curEd();
+  if(!ed) return toast('没有检测到客户端版本', 'err');
+  openSwitchModal(ed.id, '', true);
 };
 
 $('#btnSave').onclick = async ()=>{
@@ -1388,6 +1429,74 @@ document.addEventListener('click', e=>{
   openNickEditor(wrap, cur);
 }, true);
 
+/* 切换账号 / 登录新账号 共用同一个确认弹窗：只有标题和第 3 步不同 */
+function openSwitchModal(product, uid, isNew){
+  const edObj = editions().find(e=>e.id===product) || {};
+  const running = !!edObj.running;
+  const pn = prodName(product);
+  const prof = isNew ? {} : (asArr(state.data.profiles).find(x=> x.uid===uid && x.product===product) || {});
+  const who = prof.nickname || prof.uinMask || (uid ? uid.slice(0,8) : '');
+
+  const title = isNew
+    ? '<h3 style="color:var(--red)">切换到 新账号？</h3>'
+    : `<h3>切换到 ${esc(who)}？</h3>`;
+  const sub = isNew
+    ? `${esc(pn)} · 会先清空当前登录态`
+    : `${esc(pn)} · 登录态剩余 ${prof.daysLeft>=0?prof.daysLeft+' 天':'已过期'}`;
+  const step3 = isNew
+    ? `清空当前登录态并重新启动 ${esc(pn)} 客户端，在客户端里登录新账号`
+    : `写入目标账号的登录态并重新启动 ${esc(pn)} 客户端`;
+  const step1 = isNew
+    ? '先把当前账号的登录态存进快照（不会丢 token，之后随时能切回来）'
+    : `把「${esc(pn)}」当前账号的登录态存进快照（不会丢 token）`;
+
+  modal(`<div class="modal-h"><div>${title}<p>${sub}</p></div><button class="x" data-close>&times;</button></div>
+    <div class="modal-b">
+      <div style="display:flex;gap:8px;margin:4px 0 8px"><span>1</span><span>${step1}</span></div>
+      <div style="display:flex;gap:8px;margin:4px 0 8px"><span>2</span><span>关闭 ${esc(pn)} 客户端（另一个版本不受影响）</span></div>
+      <div style="display:flex;gap:8px;margin:4px 0 8px"><span>3</span><span>${step3}</span></div>
+      ${running ? `<div class="note warn" style="margin-top:12px">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div>客户端正在运行，${isNew?'退出':'切换'}会关闭它，<b>正在进行中的任务会被中断</b>。</div></div>` : ''}
+      ${(!isNew && prof.expired) ? `<div class="note warn" style="margin-top:10px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v4l3 2"/></svg><div>这个快照的 refresh token 已过期，切换后可能需要重新登录。</div></div>` : ''}
+    </div>
+    <div class="modal-f"><button class="btn" id="switchOnly">仅切换</button><button class="btn primary" id="doSwitch">切换并重启</button></div>`);
+
+  const run = async (restart)=>{
+    closeModal();
+    busy(true,
+      isNew ? '正在退出当前账号…' : '正在切换账号…',
+      restart ? '关闭客户端 → 替换登录态 → 重新启动' : '关闭客户端 → 替换登录态（不重新打开）');
+    try{
+      const r = isNew
+        ? await api('/api/accounts/logout', { product, restart })
+        : await api('/api/accounts/switch', { product, uid, restart });
+      await load().catch(()=>{});
+      busy(false);
+      if(isNew){
+        const saved = r.savedUinMask ? ('，原账号 ' + r.savedUinMask + ' 已保存') : '，原账号已保存';
+        if(restart && !r.restarted){
+          toast('已退出当前账号' + saved + '，但客户端没能自动启动：' + errText(r.reason), 'err');
+        } else {
+          toast(r.restarted ? ('已退出当前账号' + saved + '，客户端正在启动，请登录新账号')
+                            : ('已退出当前账号' + saved + '，客户端已关闭'), 'ok');
+        }
+      } else if(r.restarted){
+        toast('已切换到 ' + (r.uinMask || who) + '，客户端正在启动', 'ok');
+      } else if(restart){
+        toast('登录态已替换，但客户端没能自动启动：' + errText(r.reason), 'err');
+      } else {
+        toast('登录态已替换，客户端已关闭', 'ok');
+      }
+    }catch(e){
+      busy(false);
+      toast((isNew ? '退出失败：' : '切换失败：') + errText(e.message), 'err');
+    }
+  };
+  $('#switchOnly').onclick = ()=> run(false);
+  $('#doSwitch').onclick = ()=> run(true);
+}
+
 $('#profileBox').addEventListener('click', e=>{
   const btn = e.target.closest('button[data-act]');
   if(!btn) return;
@@ -1404,36 +1513,7 @@ $('#profileBox').addEventListener('click', e=>{
     };
     return;
   }
-  if(act === 'switch'){
-    const prof = asArr(state.data.profiles).find(x=> x.uid===u && x.product===p) || {};
-    const edObj = editions().find(e=>e.id===p) || {};
-    const running = !!edObj.running;
-    modal(`<div class="modal-h"><div><h3>切换到 ${esc(prof.nickname || prof.uinMask || u.slice(0,8))}？</h3><p>${esc(prodName(p))} · 登录态剩余 ${prof.daysLeft>=0?prof.daysLeft+' 天':'已过期'}</p></div><button class="x" data-close>&times;</button></div>
-      <div class="modal-b">
-        <div style="display:flex;gap:8px;margin:4px 0 8px"><span>1</span><span>把「${esc(prodName(p))}」当前账号的登录态存进快照（不会丢 token）</span></div>
-        <div style="display:flex;gap:8px;margin:4px 0 8px"><span>2</span><span>关闭 ${esc(prodName(p))} 客户端（另一个版本不受影响）</span></div>
-        <div style="display:flex;gap:8px;margin:4px 0 8px"><span>3</span><span>写入目标账号的登录态并重新启动 ${esc(prodName(p))} 客户端</span></div>
-        ${running ? `<div class="note warn" style="margin-top:12px">
-          <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
-          <div>客户端正在运行，切换会关闭它，<b>正在进行中的任务会被中断</b>。</div></div>` : ''}
-        ${prof.expired ? `<div class="note warn" style="margin-top:10px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v4l3 2"/></svg><div>这个快照的 refresh token 已过期，切换后可能需要重新登录。</div></div>` : ''}
-      </div>
-      <div class="modal-f"><button class="btn" data-close>取消</button><button class="btn primary" id="doSwitch">切换并重启</button></div>`);
-    $('#doSwitch').onclick = async ()=>{
-      closeModal();
-      busy(true, '正在切换账号…', '关闭客户端 → 替换登录态 → 重新启动');
-      try{
-        const r = await api('/api/accounts/switch', { product:p, uid:u });
-        await load().catch(()=>{});
-        busy(false);
-        if(r.restarted) toast('已切换到 ' + (r.uinMask||u.slice(0,8)) + '，客户端正在启动', 'ok');
-        else toast('登录态已替换，但客户端没能自动启动：' + errText(r.reason), 'err');
-      }catch(e){
-        busy(false);
-        toast('切换失败：' + errText(e.message), 'err');
-      }
-    };
-  }
+  if(act === 'switch'){ openSwitchModal(p, u, false); return; }
 });
 
 /* ---------- misc ---------- */

@@ -1,5 +1,5 @@
 <#
-  WorkBuddy Keeper 1.3.8
+  WorkBuddy Keeper 1.3.9
   Session backup / restore + account switch for the WorkBuddy desktop client.
   Supports both editions (China and international) side by side.
 
@@ -35,7 +35,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$AppVersion = '1.3.8'
+$AppVersion = '1.3.9'
 
 # --------------------------------------------------------------------------
 # paths
@@ -1305,7 +1305,7 @@ function Start-Client([string]$product) {
     return @{ started = $false; exe = $exe; reason = 'start_timeout' }
 }
 
-function Switch-Account([string]$product, [string]$uid) {
+function Switch-Account([string]$product, [string]$uid, [bool]$Restart = $true) {
     # A switch is always scoped to one edition: the snapshot must exist inside that
     # edition's profile folder, and only that edition's client and .info file are touched.
     if (-not (Test-Edition $product)) { throw 'unknown_edition' }
@@ -1329,7 +1329,12 @@ function Switch-Account([string]$product, [string]$uid) {
     try { (Get-Item -LiteralPath $dst).LastWriteTime = Get-Date } catch { }
     Write-Log ("switched to {0} {1}" -f $product, $uid)
 
-    $start = Start-Client $product
+    if ($Restart) {
+        $start = Start-Client $product
+    } else {
+        # "switch only": the login state is replaced but the client stays closed
+        $start = @{ started = $false; exe = ''; reason = 'restart_skipped' }
+    }
     $res = [pscustomobject]@{
         ok             = $true
         product        = $product
@@ -1347,6 +1352,58 @@ function Switch-Account([string]$product, [string]$uid) {
     $script:SessionCache = @{}
     $script:SessionCacheAt = @{}
     return $res
+}
+
+function Clear-Login([string]$product, [bool]$Restart = $true) {
+    # "log in with a new account": keep the current login state in profiles first
+    # (so the old account is not lost), then take the .info away so the client
+    # shows its login screen again.
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    $dst = Get-InfoPath $product
+    if (-not (Test-Path -LiteralPath $dst)) { throw 'not_logged_in' }
+
+    # The whole point of "log in a new account" is that the old one must not be
+    # lost, so saving the current login state is a hard prerequisite: if it fails
+    # we stop here instead of clearing a login we could not back up.
+    $saved = $null
+    try { $saved = Save-Profile $product } catch {
+        Write-Log ('save before logout failed: ' + $_.Exception.Message)
+        throw 'save_before_logout_failed'
+    }
+
+    $wasRunning = ((Get-ClientProcesses (Get-ProductProc $product)).Count -gt 0)
+    [void](Stop-Client (Get-ProductProc $product))
+
+    # the copy in profiles\<product>\<uid>.info is the backup, so the live file is
+    # simply removed - no second copy left behind. Do not trust the cmdlet result:
+    # some environments wrap Remove-Item and still report an error after deleting,
+    # so the only thing that matters is whether the file is actually gone.
+    try { Remove-Item -LiteralPath $dst -Force -ErrorAction Stop } catch { }
+    if (Test-Path -LiteralPath $dst) {
+        Write-Log 'logout failed: login state is still there'
+        throw 'logout_failed'
+    }
+    Write-Log ("cleared login state: {0}" -f $dst)
+
+    if ($Restart) {
+        $start = Start-Client $product
+    } else {
+        $start = @{ started = $false; exe = ''; reason = 'restart_skipped' }
+    }
+    $script:SessionCache = @{}
+    $script:SessionCacheAt = @{}
+    return [pscustomobject]@{
+        ok             = $true
+        product        = $product
+        edition        = $product
+        restarted      = $start.started
+        exe            = $start.exe
+        wasRunning     = $wasRunning
+        skippedRestart = ($start.started -eq $false)
+        savedUid       = $(if ($saved) { [string]$saved.uid } else { '' })
+        savedUinMask   = $(if ($saved) { Mask-Uin ([string]$saved.uin) } else { '' })
+        reason         = [string]$start.reason
+    }
 }
 
 # --------------------------------------------------------------------------
@@ -2186,10 +2243,28 @@ function Invoke-Api([string]$path, $query, $req) {
         '/api/accounts/switch' {
             $product = ''
             $uid = ''
-            if ($body) { $product = [string]$body.product; $uid = [string]$body.uid }
+            $restart = $true
+            if ($body) {
+                $product = [string]$body.product
+                $uid = [string]$body.uid
+                if ($null -ne $body.restart) { $restart = [bool]$body.restart }
+            }
             if (-not $product -or -not $uid) { throw 'params_required' }
             if (-not (Test-Edition $product)) { throw 'unknown_edition' }
-            $r = Switch-Account $product $uid
+            $r = Switch-Account $product $uid $restart
+            return $r
+        }
+
+        '/api/accounts/logout' {
+            $product = ''
+            $restart = $true
+            if ($body) {
+                if ($body.product) { $product = [string]$body.product }
+                if ($null -ne $body.restart) { $restart = [bool]$body.restart }
+            }
+            if (-not $product) { $product = Get-ActiveEdition }
+            if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+            $r = Clear-Login $product $restart
             return $r
         }
 
@@ -2286,6 +2361,16 @@ function Invoke-Api([string]$path, $query, $req) {
             if (-not (Test-Edition $product)) { $product = Get-ActiveEdition }
             $r = Start-Client $product
             return [pscustomobject]@{ ok = $true; edition = $product; started = $r.started; exe = $r.exe; reason = [string]$r.reason }
+        }
+
+        '/api/client/stop' {
+            $product = Get-ActiveEdition
+            if ($body -and $body.product) { $product = [string]$body.product }
+            if (-not (Test-Edition $product)) { $product = Get-ActiveEdition }
+            $stopped = Stop-Client (Get-ProductProc $product)
+            $reason = ''
+            if ($NoProcessControl) { $reason = 'process_control_disabled' }
+            return [pscustomobject]@{ ok = $true; edition = $product; stopped = $stopped; reason = $reason }
         }
 
         '/api/client/restart' {
@@ -2732,18 +2817,19 @@ function New-AppIcon {
 }
 
 function New-DesktopShortcut {
-    # A .lnk on the desktop that points at the launcher .cmd, so double-clicking it
-    # behaves exactly like the original entry point (including the single-instance
-    # check). The launcher name is Chinese, so it is discovered rather than typed.
-    $cmd = @(Get-ChildItem -LiteralPath $ScriptDir -Filter '*.cmd' -File -ErrorAction SilentlyContinue |
-             Sort-Object Name | Select-Object -First 1)
-    if (-not $cmd.Count) { throw 'launcher_missing' }
-    $cmdFile = $cmd[0]
+    # A .lnk on the desktop that points at the hidden .vbs launcher, so
+    # double-clicking it behaves exactly like the original entry point (including
+    # the single-instance check) and opens no console window at all.
+    # The launcher name is Chinese, so it is discovered rather than typed.
+    $launcher = @(Get-ChildItem -LiteralPath $ScriptDir -Filter '*.vbs' -File -ErrorAction SilentlyContinue |
+                  Sort-Object Name | Select-Object -First 1)
+    if (-not $launcher.Count) { throw 'launcher_missing' }
+    $launchFile = $launcher[0]
 
     $desktop = [Environment]::GetFolderPath('Desktop')
     if (-not $desktop -or -not (Test-Path -LiteralPath $desktop)) { throw 'desktop_missing' }
 
-    $name = [IO.Path]::GetFileNameWithoutExtension($cmdFile.Name)
+    $name = [IO.Path]::GetFileNameWithoutExtension($launchFile.Name)
     # drop the leading verb ("<chinese> ") so the icon reads as the product name
     $m = [regex]::Match($name, '[A-Za-z0-9]')
     if ($m.Success -and $m.Index -gt 0) { $name = $name.Substring($m.Index) }
@@ -2754,9 +2840,10 @@ function New-DesktopShortcut {
     $shell = $null
     try { $shell = New-Object -ComObject WScript.Shell } catch { throw 'wscript_missing' }
     $sc = $shell.CreateShortcut($lnk)
-    $sc.TargetPath = $cmdFile.FullName
+    $sc.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
+    $sc.Arguments = '"' + $launchFile.FullName + '"'
+    $sc.WindowStyle = 1
     $sc.WorkingDirectory = $ScriptDir
-    $sc.WindowStyle = 7          # the launcher starts the server minimised anyway
     $sc.Description = $name
 
     # the program's own WB mark, not WorkBuddy's - otherwise the two look identical

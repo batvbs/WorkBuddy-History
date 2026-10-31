@@ -62,7 +62,7 @@ WorkBuddy 把每个对话记在数据库里，每行带一个归属账号。换�
 
 0. 点右上角绿色的Code按钮，再点[Download ZIP](https://github.com/batvbs/WorkBuddy-History/archive/refs/heads/Beta.zip)
 1. 下载后解压到任意目录（路径带中文也没关系）
-2. 双击 `启动 WorkBuddy 对话管家.cmd`
+2. 双击 `启动 WorkBuddy 对话管家.vbs`（后台启动，不会弹出黑色命令行窗口）
 3. 浏览器会以应用窗口打开界面，默认就在「对话备份」页
 
 点左下角「桌面图标」可以在桌面建一个快捷方式。
