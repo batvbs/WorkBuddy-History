@@ -1,5 +1,5 @@
 <#
-  WorkBuddy Keeper 1.3.9
+  WorkBuddy Keeper 1.5.3
   Session backup / restore + account switch for the WorkBuddy desktop client.
   Supports both editions (China and international) side by side.
 
@@ -35,7 +35,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$AppVersion = '1.3.9'
+$AppVersion = '1.5.3'
 
 # --------------------------------------------------------------------------
 # paths
@@ -154,6 +154,8 @@ function Mask-Uin([string]$uin) {
 
 function Get-DisplayName([string]$uid) {
     if (-not $uid) { return 'unknown' }
+    # a uid is a uuid, but keep this safe for hand-made or truncated rows
+    if ($uid.Length -le 8) { return $uid }
     return $uid.Substring(0, 8)
 }
 
@@ -619,13 +621,17 @@ function Get-DbSessionCounts([string]$dbPath) {
     # Whole-database tallies, no account filter: archived and deleted rows are
     # counted too, because "how many conversations are in this backup" is a
     # different question from "how many can I see right now".
-    $out = [pscustomobject]@{ total = 0; archived = 0; deleted = 0; alive = 0 }
+    $out = [pscustomobject]@{ total = 0; archived = 0; deleted = 0; cloud = 0; alive = 0 }
     $db = Open-WbDatabasePath $dbPath
     try {
+        # archived/deleted only count local rows: cloud conversations are a bucket
+        # of their own in the UI and are listed only under the "cloud" chip, so a
+        # tombstoned cloud row must not inflate the deleted tally here either.
         $rows = [WbSqlite]::Query($db,
             "SELECT count(*) AS n,
-                    sum(CASE WHEN status='archived' THEN 1 ELSE 0 END) AS arch,
-                    sum(CASE WHEN deleted_at IS NOT NULL AND CAST(deleted_at AS TEXT) <> '-1' THEN 1 ELSE 0 END) AS del
+                    sum(CASE WHEN transport='local' AND status='archived' THEN 1 ELSE 0 END) AS arch,
+                    sum(CASE WHEN transport='local' AND deleted_at IS NOT NULL AND CAST(deleted_at AS TEXT) <> '-1' THEN 1 ELSE 0 END) AS del,
+                    sum(CASE WHEN transport <> 'local' THEN 1 ELSE 0 END) AS cld
              FROM sessions", $null)
     } finally {
         [WbSqlite]::Close($db)
@@ -635,6 +641,7 @@ function Get-DbSessionCounts([string]$dbPath) {
         if ($r['n']) { $out.total = [int]$r['n'] }
         if ($r['arch']) { $out.archived = [int]$r['arch'] }
         if ($r['del']) { $out.deleted = [int]$r['del'] }
+        if ($r['cld']) { $out.cloud = [int]$r['cld'] }
     }
     $out.alive = $out.total - $out.deleted
     return $out
@@ -734,8 +741,12 @@ function Merge-DbSessions([string]$product, [string]$srcDbPath) {
 # client rebuilds from the database on every start - it is not authoritative and
 # must not be treated as one.
 # --------------------------------------------------------------------------
-function Get-DbSessions([string]$product) {
-    $db = Open-WbDatabase $product
+function Get-DbSessionsAt([string]$dbPath) {
+    # Same shape as Get-DbSessions, but for any database file - the live one, or
+    # a copy staged out of a backup. Reading a backup through this is what lets
+    # the backup viewer show what was really saved instead of trusting the
+    # manifest, which only ever recorded what the sidebar had rendered.
+    $db = Open-WbDatabasePath $dbPath
     try {
         $rows = [WbSqlite]::Query($db,
             "SELECT id, user_id, title, custom_title, cwd, transport, status, updated_at, deleted_at FROM sessions",
@@ -770,6 +781,10 @@ function Get-DbSessions([string]$product) {
         })
     }
     return $list.ToArray()
+}
+
+function Get-DbSessions([string]$product) {
+    return (Get-DbSessionsAt (Join-Path (Get-EditionHome $product) 'workbuddy.db'))
 }
 
 function Copy-DbSnapshot([string]$product, [string]$tag) {
@@ -1114,6 +1129,281 @@ function Invoke-RecoverSessions([string]$product, [string[]]$ids, [bool]$Backup 
 }
 
 # --------------------------------------------------------------------------
+# conversation state + permanent delete
+#
+# Three states are shown as one column, but the table stores them in two:
+#   status = 'archived'                      -> sits in the client's archive
+#   deleted_at = millisecond stamp           -> tombstoned, hidden everywhere
+#   deleted_at = -1                          -> cloud row marker, NOT a tombstone
+#                                       (Get-SessionsIndex already reports it as
+#                                        deleted=$false, so it never lands here)
+# A row can be archived and deleted at the same time, which is why turning one
+# flag on does not clear the other unless the target state says so.
+# --------------------------------------------------------------------------
+function Set-SessionState([string]$product, [string]$id, [string]$target) {
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    if (-not $id) { throw 'params_required' }
+    if (@('visible', 'archived', 'deleted') -notcontains $target) { throw 'bad_state' }
+
+    # The client holds the database open and flushes its own page cache. A write
+    # done while it runs is silently undone by the next checkpoint, so the column
+    # is read-only in the UI while the client is up - and enforced here too.
+    if ((Get-ClientProcesses (Get-ProductProc $product)).Count -gt 0) { throw 'client_running' }
+
+    $dbPath = Join-Path (Get-EditionHome $product) 'workbuddy.db'
+    if (-not (Test-Path -LiteralPath $dbPath)) { throw 'no_database' }
+
+    $state = 'visible'
+    $db = Open-WbDatabasePath $dbPath
+    try {
+        $rows = [WbSqlite]::Query($db, 'SELECT id, transport, status, deleted_at FROM sessions WHERE id=?1', @($id))
+        if (-not $rows.Count) { throw 'session_not_found' }
+        # cloud rows are owned and stored on the server; the local row is a mirror
+        if ([string]$rows[0]['transport'] -ne 'local') { throw 'cloud_session' }
+
+        [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
+        try {
+            switch ($target) {
+                'visible' {
+                    # clearing the archive flag needs a normal status back. The old
+                    # one is not recorded anywhere; 'completed' is the harmless
+                    # value the client itself keeps for an idle conversation.
+                    [void][WbSqlite]::Exec($db,
+                        "UPDATE sessions SET deleted_at=NULL, status=CASE WHEN status='archived' THEN 'completed' ELSE status END WHERE id=?1 AND transport='local'",
+                        @($id))
+                }
+                'archived' {
+                    [void][WbSqlite]::Exec($db,
+                        "UPDATE sessions SET status='archived', deleted_at=NULL WHERE id=?1 AND transport='local'",
+                        @($id))
+                }
+                'deleted' {
+                    [void][WbSqlite]::Exec($db,
+                        "UPDATE sessions SET deleted_at=?2 WHERE id=?1 AND transport='local'",
+                        @($id, [string](Get-NowMs)))
+                }
+            }
+            [void][WbSqlite]::Exec($db, 'COMMIT', $null)
+        } catch {
+            [void][WbSqlite]::Exec($db, 'ROLLBACK', $null)
+            throw
+        }
+        # fold the log in, otherwise the client restarts on a stale page cache
+        [void][WbSqlite]::Query($db, 'PRAGMA wal_checkpoint(TRUNCATE)', $null)
+        $after = [WbSqlite]::Query($db, 'SELECT status, deleted_at FROM sessions WHERE id=?1', @($id))
+        if ($after.Count) {
+            $raw = [string]$after[0]['deleted_at']
+            if ($raw -and $raw -ne '-1') { $state = 'deleted' }
+            elseif ([string]$after[0]['status'] -eq 'archived') { $state = 'archived' }
+        }
+    } finally {
+        [WbSqlite]::Close($db)
+    }
+
+    $script:SessionCache = @{}
+    $script:SessionCacheAt = @{}
+    Write-Log ("session state: {0} -> {1} ({2})" -f $id, $target, $state)
+    return $state
+}
+
+function Get-DeletedSessions([string]$product) {
+    # Everything that carries a real tombstone, no matter which account owns it.
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    $all = Get-SessionsIndex $product -IncludeDeleted
+    $cur = Get-CurrentAccount $product
+    $curUid = ''
+    if ($cur) { $curUid = [string]$cur.uid }
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($s in $all) {
+        if (-not $s.deleted) { continue }
+        if ($s.transport -ne 'local') { continue }
+        $mine = ($curUid -ne '' -and [string]$s.uid -eq $curUid)
+        $list.Add([pscustomobject]@{
+            id        = [string]$s.id
+            title     = [string]$s.title
+            slug      = [string]$s.slug
+            uid       = [string]$s.uid
+            space     = [string]$s.space
+            bytes     = [long]$s.bytes
+            updatedMs = [long]$s.updatedMs
+            archived  = [bool]$s.archived
+            mine      = $mine
+        })
+    }
+    # current account first, then newest first: the rows people usually want gone
+    # are their own recent mistakes
+    $sorted = @($list | Sort-Object -Property @{ Expression = { $_.mine }; Descending = $true }, @{ Expression = { $_.updatedMs }; Descending = $true })
+    return [pscustomobject]@{
+        account  = $cur
+        sessions = $sorted
+        count    = $sorted.Count
+    }
+}
+
+function Invoke-PurgeSessions([string]$product, [string[]]$ids, [bool]$Backup = $true) {
+    # Permanent. The row, the transcript, the tool-cache folder and the rollback
+    # log all go: keeping any of them would leave a conversation that no longer
+    # shows up but still occupies disk, which is the exact confusion this dialog
+    # is meant to end.
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    $edHome = Get-EditionHome $product
+    $dbPath = Join-Path $edHome 'workbuddy.db'
+    if (-not (Test-Path -LiteralPath $dbPath)) { throw 'no_database' }
+
+    # Re-check every id against the database: a dialog left open for a while must
+    # not delete a conversation that was brought back to life in the meantime.
+    $rows = Get-DbSessions $product
+    $map = @{}
+    foreach ($s in $rows) { $map[$s.id] = $s }
+    $targets = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+    foreach ($id in @($ids)) {
+        $sid = [string]$id
+        if (-not $sid) { continue }
+        if ($seen.ContainsKey($sid)) { continue }
+        $seen[$sid] = $true
+        if (-not $map.ContainsKey($sid)) { continue }
+        $s = $map[$sid]
+        if (-not $s.deleted) { continue }
+        if ($s.transport -ne 'local') { continue }
+        $targets.Add($s)
+    }
+    if ($targets.Count -eq 0) { throw 'nothing_to_purge' }
+
+    $procName = Get-ProductProc $product
+    $wasRunning = ((Get-ClientProcesses $procName).Count -gt 0)
+    if ($wasRunning) {
+        [void](Stop-Client $procName)
+        for ($i = 0; $i -lt 40; $i++) {
+            if ((Get-ClientProcesses $procName).Count -eq 0) { break }
+            Start-Sleep -Milliseconds 150
+        }
+    }
+
+    # A FULL backup first, same as a restore: a lone .db would not bring the
+    # transcripts back if the wrong rows were ticked.
+    $snapName = ''
+    if ($Backup) {
+        try {
+            $m = New-Backup $true 'pre-purge' '' $product
+            if ($m) { $snapName = [string]$m.name }
+        } catch {
+            Write-Log ('pre-purge backup failed: ' + $_.Exception.Message)
+        }
+    }
+
+    # 1. database rows
+    $failure = ''
+    $db = $null
+    $removedRows = 0
+    try {
+        $db = Open-WbDatabasePath $dbPath
+        [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
+        try {
+            foreach ($s in $targets) {
+                try { [void][WbSqlite]::Exec($db, 'DELETE FROM session_usage WHERE session_id=?1', @([string]$s.id)) } catch { }
+                $n = [WbSqlite]::Exec($db,
+                    "DELETE FROM sessions WHERE id=?1 AND transport='local' AND deleted_at IS NOT NULL AND CAST(deleted_at AS TEXT) <> '-1'",
+                    @([string]$s.id))
+                $removedRows += $n
+            }
+            [void][WbSqlite]::Exec($db, 'COMMIT', $null)
+        } catch {
+            [void][WbSqlite]::Exec($db, 'ROLLBACK', $null)
+            throw
+        }
+        [void][WbSqlite]::Query($db, 'PRAGMA wal_checkpoint(TRUNCATE)', $null)
+        $chk = [WbSqlite]::Query($db, 'PRAGMA integrity_check', $null)
+        if (-not $chk.Count -or [string]$chk[0]['integrity_check'] -ne 'ok') { throw 'integrity_check_failed' }
+    } catch {
+        $failure = $_.Exception.Message
+    } finally {
+        if ($db -ne $null) { [WbSqlite]::Close($db) }
+    }
+    if ($failure) {
+        Write-Log ('purge failed: ' + $failure)
+        throw ('purge_failed: ' + $failure)
+    }
+
+    # 2. transcript files, tool-cache folders, rollback logs
+    $projects = Join-Path $edHome 'projects'
+    $freed = [long]0
+    $removedFiles = 0
+    $idset = @{}
+    foreach ($s in $targets) { $idset[[string]$s.id] = $true }
+    if (Test-Path -LiteralPath $projects) {
+        $dirs = @(Get-ChildItem -LiteralPath $projects -Directory -ErrorAction SilentlyContinue)
+        foreach ($s in $targets) {
+            $sid = [string]$s.id
+            $slugs = @()
+            if ($s.slug) { $slugs += [string]$s.slug }
+            if (-not $slugs.Count) { foreach ($d in $dirs) { $slugs += $d.Name } }
+            foreach ($slug in $slugs) {
+                $base = Join-Path (Join-Path $projects $slug) $sid
+                foreach ($f in @(($base + '.jsonl'), ($base + '.file-rollback.ndjson'))) {
+                    if (-not (Test-Path -LiteralPath $f)) { continue }
+                    try {
+                        # Measure first, add afterwards: adding before the delete
+                        # would report the space as reclaimed even when the
+                        # removal throws (read-only file, AV lock, trash policy).
+                        $len = [long](Get-Item -LiteralPath $f).Length
+                        Remove-Item -LiteralPath $f -Force -ErrorAction Stop
+                        $freed += $len
+                        $removedFiles++
+                    } catch { Write-Log ('purge file failed: ' + $f + ' ' + $_.Exception.Message) }
+                }
+                if (Test-Path -LiteralPath $base) {
+                    try {
+                        $len = [long](Get-FolderSize $base)
+                        Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction Stop
+                        $freed += $len
+                        $removedFiles++
+                    } catch { Write-Log ('purge folder failed: ' + $base + ' ' + $_.Exception.Message) }
+                }
+            }
+        }
+    }
+
+    # 3. sidebar caches: no account may keep rendering a ghost row
+    $sidebar = 0
+    foreach ($d in @(Get-ChildItem -LiteralPath $edHome -Directory -ErrorAction SilentlyContinue)) {
+        $p = Join-Path $d.FullName 'sidebar-list-snapshot.json'
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        $snap = Read-JsonFile $p
+        if (-not $snap -or -not $snap.items) { continue }
+        $keep = New-Object System.Collections.Generic.List[object]
+        $drop = 0
+        foreach ($it in @($snap.items)) {
+            $iid = ''
+            if ($it.id) { $iid = [string]$it.id }
+            if ($iid -and $idset.ContainsKey($iid)) { $drop++ } else { $keep.Add($it) }
+        }
+        if ($drop -gt 0) {
+            $snap.items = $keep.ToArray()
+            $snap.savedAt = (Get-NowMs)
+            Write-JsonFile $p $snap
+            $sidebar += $drop
+        }
+    }
+
+    $script:SessionCache = @{}
+    $script:SessionCacheAt = @{}
+    Write-Log ("purge: edition={0} requested={1} rows={2} files={3} sidebar={4}" -f $product, $targets.Count, $removedRows, $removedFiles, $sidebar)
+    return [pscustomobject]@{
+        ok         = $true
+        edition    = $product
+        requested  = $targets.Count
+        purged     = $removedRows
+        files      = $removedFiles
+        freed      = $freed
+        sidebar    = $sidebar
+        snapshot   = $snapName
+        wasRunning = $wasRunning
+        skipped    = ($targets.Count - $removedRows)
+    }
+}
+
+# --------------------------------------------------------------------------
 # client process control
 # --------------------------------------------------------------------------
 function Get-ClientProcesses([string]$procName) {
@@ -1305,13 +1595,18 @@ function Start-Client([string]$product) {
     return @{ started = $false; exe = $exe; reason = 'start_timeout' }
 }
 
-function Switch-Account([string]$product, [string]$uid, [bool]$Restart = $true) {
+function Switch-Account([string]$product, [string]$uid, [bool]$Restart = $true, [bool]$MoveSessions = $false) {
     # A switch is always scoped to one edition: the snapshot must exist inside that
     # edition's profile folder, and only that edition's client and .info file are touched.
     if (-not (Test-Edition $product)) { throw 'unknown_edition' }
     $infoSrc = Get-ProfileInfoPath $product $uid
     if (-not (Test-Path -LiteralPath $infoSrc)) { throw 'profile_missing' }
     $meta = Read-JsonFile (Get-ProfileMetaPath $product $uid)
+
+    # the account we are leaving, captured before the .info file is replaced
+    $prev = Get-CurrentAccount $product
+    $prevUid = ''
+    if ($prev) { $prevUid = [string]$prev.uid }
 
     # never lose the token of the account we are leaving
     try { [void](Save-Profile $product) } catch { Write-Log 'skip saving current login (none)' }
@@ -1329,6 +1624,39 @@ function Switch-Account([string]$product, [string]$uid, [bool]$Restart = $true) 
     try { (Get-Item -LiteralPath $dst).LastWriteTime = Get-Date } catch { }
     Write-Log ("switched to {0} {1}" -f $product, $uid)
 
+    # Optional: bring every conversation of the account we just left along. This
+    # runs after the client is closed and before it is started, so the new owner
+    # is already on disk when the sidebar is built from the database.
+    $moved = 0
+    $moveError = ''
+    if ($MoveSessions -and $prevUid -and $prevUid -ne $uid) {
+        $dbPath = Join-Path (Get-EditionHome $product) 'workbuddy.db'
+        if (Test-Path -LiteralPath $dbPath) {
+            $moving = @()
+            try {
+                # assign first, then filter: piping the wrapped return value
+                # straight into Where-Object would hand it the whole array
+                $idx = Get-SessionsIndex $product -IncludeDeleted
+                $moving = @($idx | Where-Object { [string]$_.uid -eq $prevUid })
+            } catch { $moving = @() }
+            try {
+                $moved = Invoke-UidRemap $dbPath $prevUid $uid
+                $script:SessionCache = @{}
+                $script:SessionCacheAt = @{}
+                if ($moving.Count -gt 0) {
+                    try { [void](Update-SidebarCache $product $moving $uid) } catch {
+                        Write-Log ('sidebar cache after move failed: ' + $_.Exception.Message)
+                    }
+                }
+            } catch {
+                $moveError = $_.Exception.Message
+                Write-Log ('move sessions failed: ' + $moveError)
+            }
+        } else {
+            $moveError = 'no_database'
+        }
+    }
+
     if ($Restart) {
         $start = Start-Client $product
     } else {
@@ -1345,6 +1673,9 @@ function Switch-Account([string]$product, [string]$uid, [bool]$Restart = $true) 
         exe            = $start.exe
         wasRunning     = $wasRunning
         skippedRestart = ($start.started -eq $false)
+        moved          = $moved
+        movedFrom      = $prevUid
+        moveError      = $moveError
         reason         = ''
     }
     if ($meta) { $res.uinMask = (Mask-Uin ([string]$meta.uin)) }
@@ -1529,7 +1860,14 @@ function Get-SessionsIndex([string]$product, [switch]$IncludeDeleted) {
 
 function Get-SessionStats([string]$product) {
     if (-not (Test-Edition $product)) { $product = Get-ActiveEdition }
-    $arr = Get-SessionsIndex $product   # returns a real array; do not wrap with @() (would nest)
+    $all = Get-SessionsIndex $product   # returns a real array; do not wrap with @() (would nest)
+    # Cloud conversations are not local: their transcript lives on the server and
+    # their row here is only a mirror. The card is titled "local conversations",
+    # so every number on it counts local rows only - otherwise "conversations",
+    # "visible" and "archived" would each be summing a different thing and the
+    # three would not add up. Cloud rows are listed under "all conversations ->
+    # cloud" instead.
+    $arr = @($all | Where-Object { [string]$_.transport -eq 'local' })
     $bytes = 0
     foreach ($s in $arr) { $bytes += $s.bytes }
     $cur = Get-CurrentAccount $product
@@ -1557,6 +1895,42 @@ function Get-SessionStats([string]$product) {
 # --------------------------------------------------------------------------
 # backups
 # --------------------------------------------------------------------------
+$script:BackupCountCache = @{}
+
+function Get-BackupLocalCount([string]$name) {
+    # How many conversations the backup actually holds, cloud rows excluded -
+    # the number the "conversations" column is supposed to show. manifest.json
+    # cannot answer it: it was written from the sidebar, so archived and deleted
+    # conversations (and every cloud row) are missing from it.
+    #
+    # Counting means staging the copy, so the answer is memoised against the
+    # database file's size and timestamp. A backup never changes once it is made,
+    # so in practice each one is counted once per run.
+    #
+    # Returns -1 when there is no readable database, and the caller falls back to
+    # the manifest count.
+    $dir = Join-Path $BackupsDir $name
+    $dbFile = Join-Path $dir 'workbuddy.db'
+    if (-not (Test-Path -LiteralPath $dbFile)) { return -1 }
+    $fi = Get-Item -LiteralPath $dbFile
+    $key = $name + '|' + $fi.Length + '|' + $fi.LastWriteTimeUtc.Ticks
+    if ($script:BackupCountCache.ContainsKey($key)) { return [int]$script:BackupCountCache[$key] }
+    $stage = $null
+    $n = -1
+    try {
+        $stage = New-StagedDb $dir
+        $c = Get-DbSessionCounts (Join-Path $stage 'workbuddy.db')
+        $n = [int]$c.total - [int]$c.cloud
+    } catch {
+        Write-Log ('backup count failed: ' + $name + ': ' + $_.Exception.Message)
+        $n = -1
+    } finally {
+        Remove-StagedDb $stage
+    }
+    if ($n -ge 0) { $script:BackupCountCache[$key] = $n }
+    return $n
+}
+
 function Get-BackupMeta([string]$name) {
     $dir = Join-Path $BackupsDir $name
     $mf = Read-JsonFile (Join-Path $dir 'manifest.json')
@@ -1588,6 +1962,10 @@ function Get-BackupMeta([string]$name) {
         createdAt          = (ConvertFrom-Ms $createdMs)
         createdAtMs        = $createdMs
         sessionCount       = $sessions.Count
+        # Conversations actually in the backup (all states, cloud excluded).
+        # -1 = no readable database, so the count is unknown and sessionCount is
+        # the only thing left to show.
+        localCount         = (Get-BackupLocalCount $name)
         fileCount          = [long]$mf.fileCount
         totalBytes         = $total
         accountUid         = $acctUid
@@ -1738,6 +2116,87 @@ function Get-BackupSessions([string]$name) {
         })
     }
     return ,$list.ToArray()
+}
+
+function Get-BackupDbDetail([string]$name) {
+    # What the backup really contains, read from the copy of the database inside
+    # it rather than from manifest.json. The manifest was written from the
+    # sidebar, so it never mentions archived or deleted conversations (and says
+    # nothing at all about cloud rows).
+    #
+    # The database is staged first so a backup carrying an unmerged -wal gives
+    # the same answer as one that was checkpointed before being copied.
+    $dir = Join-Path $BackupsDir $name
+    $out = [pscustomobject]@{
+        counts   = [pscustomobject]@{ total = 0; archived = 0; deleted = 0; cloud = 0; alive = 0 }
+        sessions = @()
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $dir 'workbuddy.db'))) { return $out }
+
+    $stage = $null
+    try {
+        $stage = New-StagedDb $dir
+        $stageDb = Join-Path $stage 'workbuddy.db'
+        $out.counts = Get-DbSessionCounts $stageDb
+        $rows = Get-DbSessionsAt $stageDb
+    } catch {
+        Write-Log ('backup db detail failed: ' + $_.Exception.Message)
+        return $out
+    } finally {
+        Remove-StagedDb $stage
+    }
+
+    # Sizes come from the backup's own projects tree. A conversation whose
+    # transcript was not included simply reports 0 bytes rather than vanishing:
+    # the row exists, that is worth showing.
+    $projects = Join-Path $dir 'projects'
+    $files = @{}
+    if (Test-Path -LiteralPath $projects) {
+        foreach ($d in @(Get-ChildItem -LiteralPath $projects -Directory -ErrorAction SilentlyContinue)) {
+            foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -File -Filter '*.jsonl' -ErrorAction SilentlyContinue)) {
+                if ($f.Name -like '*.file-rollback.*') { continue }
+                $files[[IO.Path]::GetFileNameWithoutExtension($f.Name)] = @{ slug = $d.Name; len = [long]$f.Length }
+            }
+        }
+    }
+
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($r in $rows) {
+        $sid = [string]$r.id
+        $bytes = [long]0
+        $slug = ''
+        if ($files.ContainsKey($sid)) {
+            $fi = $files[$sid]
+            $slug = [string]$fi.slug
+            $bytes = [long]$fi.len
+            $sdir = Join-Path (Join-Path $projects $slug) $sid
+            if (Test-Path -LiteralPath $sdir) { $bytes += (Get-FolderSize $sdir) }
+            $rb = Join-Path (Join-Path $projects $slug) ($sid + '.file-rollback.ndjson')
+            if (Test-Path -LiteralPath $rb) { $bytes += (Get-Item -LiteralPath $rb).Length }
+        }
+        $state = 'visible'
+        if ($r.deleted) { $state = 'deleted' }
+        elseif ($r.archived) { $state = 'archived' }
+        elseif ([string]$r.transport -ne 'local') { $state = 'cloud' }
+        $list.Add([pscustomobject]@{
+            id        = $sid
+            title     = [string]$r.title
+            slug      = $slug
+            space     = [string]$r.cwd
+            uid       = [string]$r.uid
+            shortUid  = (Get-DisplayName ([string]$r.uid))
+            transport = [string]$r.transport
+            state     = $state
+            archived  = [bool]$r.archived
+            deleted   = [bool]$r.deleted
+            cloud     = ([string]$r.transport -ne 'local')
+            bytes     = $bytes
+            updatedMs = [long]$r.updatedMs
+            hasFile   = $files.ContainsKey($sid)
+        })
+    }
+    $out.sessions = $list.ToArray()
+    return $out
 }
 
 function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$targetEdition) {
@@ -2091,6 +2550,10 @@ function Invoke-Api([string]$path, $query, $req) {
             if ($query.ContainsKey('edition')) { $edition = $query['edition'] }
             if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
             $all = Get-SessionsIndex $edition
+            # Same rule as the stats card above: this list is "local
+            # conversations", so cloud rows stay out of it. They are reachable
+            # through "all conversations -> cloud".
+            $all = @($all | Where-Object { [string]$_.transport -eq 'local' })
             $limit = 300
             if ($query.ContainsKey('limit')) { [void][int]::TryParse($query['limit'], [ref]$limit) }
             $items = @($all | Select-Object -First $limit)
@@ -2100,6 +2563,159 @@ function Invoke-Api([string]$path, $query, $req) {
                 total    = $all.Count
                 sessions = $items
             }
+        }
+
+        '/api/sessions/all' {
+            # The "all conversations" window: every row in the database, deleted
+            # ones included, plus one tally per account so the first filter row can
+            # be built without a second round trip.
+            $edition = ''
+            if ($query.ContainsKey('edition')) { $edition = $query['edition'] }
+            if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+            # Get-SessionsIndex returns a real array; wrapping it with @() here
+            # would nest it one level deeper and break every member access
+            $all = Get-SessionsIndex $edition -IncludeDeleted
+            $cur = Get-CurrentAccount $edition
+            $curUid = ''
+            if ($cur) { $curUid = [string]$cur.uid }
+
+            $items = New-Object System.Collections.Generic.List[object]
+            $accMap = @{}
+            $accOrder = New-Object System.Collections.Generic.List[string]
+            foreach ($s in $all) {
+                $u = [string]$s.uid
+                $state = 'visible'
+                # Cloud rows carry deleted_at = -1, which is a marker, not a
+                # deletion, so they used to fall through to "visible". They are
+                # their own bucket now: they cannot be edited here at all, and
+                # lumping them in with the local, editable rows was misleading.
+                if ($s.deleted) { $state = 'deleted' }
+                elseif ($s.archived) { $state = 'archived' }
+                elseif ([string]$s.transport -ne 'local') { $state = 'cloud' }
+                $mine = ($curUid -ne '' -and $u -eq $curUid)
+                $items.Add([pscustomobject]@{
+                    id        = [string]$s.id
+                    title     = [string]$s.title
+                    slug      = [string]$s.slug
+                    space     = [string]$s.space
+                    uid       = $u
+                    shortUid  = (Get-DisplayName $u)
+                    nickname  = (Get-Nickname $edition $u)
+                    bytes     = [long]$s.bytes
+                    updatedMs = [long]$s.updatedMs
+                    transport = [string]$s.transport
+                    state     = $state
+                    archived  = [bool]$s.archived
+                    deleted   = [bool]$s.deleted
+                    mine      = $mine
+                    cloud     = ($s.transport -ne 'local')
+                })
+                if (-not $accMap.ContainsKey($u)) {
+                    $accMap[$u] = [pscustomobject]@{
+                        uid      = $u
+                        nickname = (Get-Nickname $edition $u)
+                        shortUid = (Get-DisplayName $u)
+                        mine     = $mine
+                        total    = 0
+                        visible  = 0
+                        archived = 0
+                        deleted  = 0
+                        cloud    = 0
+                    }
+                    $accOrder.Add($u)
+                }
+                $a = $accMap[$u]
+                $a.total = $a.total + 1
+                if ($state -eq 'deleted') { $a.deleted = $a.deleted + 1 }
+                elseif ($state -eq 'archived') { $a.archived = $a.archived + 1 }
+                elseif ($state -eq 'cloud') { $a.cloud = $a.cloud + 1 }
+                else { $a.visible = $a.visible + 1 }
+            }
+            $accounts = New-Object System.Collections.Generic.List[object]
+            foreach ($k in $accOrder) { $accounts.Add($accMap[$k]) }
+            $sortedAcc = @($accounts | Sort-Object -Property @{ Expression = { if ($_.uid -eq '') { 2 } elseif ($_.mine) { 0 } else { 1 } } }, @{ Expression = { $_.total }; Descending = $true })
+
+            return [pscustomobject]@{
+                ok       = $true
+                edition  = $edition
+                running  = ((Get-ClientProcesses (Get-ProductProc $edition)).Count -gt 0)
+                total    = $items.Count
+                current  = [pscustomobject]@{
+                    uid      = $curUid
+                    nickname = $(if ($curUid) { Get-Nickname $edition $curUid } else { '' })
+                    uinMask  = $(if ($cur) { Mask-Uin ([string]$cur.uin) } else { '' })
+                }
+                accounts = $sortedAcc
+                sessions = $items.ToArray()
+            }
+        }
+
+        '/api/sessions/state' {
+            $edition = ''
+            $sid = ''
+            $target = ''
+            if ($body) {
+                if ($body.edition) { $edition = [string]$body.edition }
+                if ($body.id) { $sid = [string]$body.id }
+                if ($body.state) { $target = [string]$body.state }
+            }
+            if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+            $state = Set-SessionState $edition $sid $target
+            return [pscustomobject]@{ ok = $true; edition = $edition; id = $sid; state = $state }
+        }
+
+        '/api/purge/list' {
+            $edition = ''
+            if ($query.ContainsKey('edition')) { $edition = $query['edition'] }
+            if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+            $r = Get-DeletedSessions $edition
+            $items = New-Object System.Collections.Generic.List[object]
+            foreach ($s in $r.sessions) {
+                $items.Add([pscustomobject]@{
+                    id        = $s.id
+                    title     = $s.title
+                    uid       = $s.uid
+                    shortUid  = (Get-DisplayName $s.uid)
+                    nickname  = (Get-Nickname $edition $s.uid)
+                    bytes     = $s.bytes
+                    updatedMs = $s.updatedMs
+                    archived  = $s.archived
+                    mine      = $s.mine
+                    defaultOn = $true
+                })
+            }
+            $curUid = ''
+            $curUin = ''
+            if ($r.account) {
+                $curUid = [string]$r.account.uid
+                $curUin = Mask-Uin ([string]$r.account.uin)
+            }
+            return [pscustomobject]@{
+                ok       = $true
+                edition  = $edition
+                total    = $items.Count
+                running  = ((Get-ClientProcesses (Get-ProductProc $edition)).Count -gt 0)
+                account  = [pscustomobject]@{
+                    uid      = $curUid
+                    uinMask  = $curUin
+                    nickname = $(if ($curUid) { Get-Nickname $edition $curUid } else { '' })
+                }
+                sessions = $items.ToArray()
+            }
+        }
+
+        '/api/purge/apply' {
+            $edition = ''
+            $ids = @()
+            $doBackup = $true
+            if ($body) {
+                if ($body.edition) { $edition = [string]$body.edition }
+                if ($body.ids) { $ids = @($body.ids) }
+                if ($null -ne $body.backup) { $doBackup = [bool]$body.backup }
+            }
+            if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+            if ($ids.Count -eq 0) { throw 'nothing_to_purge' }
+            return (Invoke-PurgeSessions $edition $ids $doBackup)
         }
 
         '/api/backup/create' {
@@ -2153,22 +2769,26 @@ function Invoke-Api([string]$path, $query, $req) {
                 hasDatabase = $hasDb
                 hasWal      = (Test-Path -LiteralPath (Join-Path $dir 'workbuddy.db-wal'))
             }
-            # Count straight out of the backup's own database: the manifest only
-            # lists what the sidebar showed, so it never mentions archived or
-            # deleted conversations.
-            $counts = [pscustomobject]@{ total = 0; archived = 0; deleted = 0; alive = 0 }
-            if ($hasDb) {
-                $stage = $null
-                try {
-                    $stage = New-StagedDb $dir
-                    $counts = Get-DbSessionCounts (Join-Path $stage 'workbuddy.db')
-                } catch {
-                    Write-Log ('backup detail counts failed: ' + $_.Exception.Message)
-                } finally {
-                    Remove-StagedDb $stage
-                }
+            # Everything the backup's database holds, deleted and cloud rows
+            # included. The staged database is opened once for both the tallies
+            # and the row list.
+            $detail = [pscustomobject]@{
+                counts   = [pscustomobject]@{ total = 0; archived = 0; deleted = 0; cloud = 0; alive = 0 }
+                sessions = @()
             }
-            return [pscustomobject]@{ ok = $true; backup = $meta; sessions = $sessions; database = $dbInfo; counts = $counts }
+            if ($hasDb) {
+                try { $detail = Get-BackupDbDetail $name }
+                catch { Write-Log ('backup detail failed: ' + $_.Exception.Message) }
+            }
+            return [pscustomobject]@{
+                ok         = $true
+                backup     = $meta
+                sessions   = $sessions
+                dbSessions = $detail.sessions
+                hasDbList  = ($detail.sessions.Count -gt 0)
+                database   = $dbInfo
+                counts     = $detail.counts
+            }
         }
 
         '/api/backup/remap-check' {
@@ -2244,14 +2864,16 @@ function Invoke-Api([string]$path, $query, $req) {
             $product = ''
             $uid = ''
             $restart = $true
+            $move = $false
             if ($body) {
                 $product = [string]$body.product
                 $uid = [string]$body.uid
                 if ($null -ne $body.restart) { $restart = [bool]$body.restart }
+                if ($null -ne $body.moveSessions) { $move = [bool]$body.moveSessions }
             }
             if (-not $product -or -not $uid) { throw 'params_required' }
             if (-not (Test-Edition $product)) { throw 'unknown_edition' }
-            $r = Switch-Account $product $uid $restart
+            $r = Switch-Account $product $uid $restart $move
             return $r
         }
 
@@ -2395,8 +3017,9 @@ function Invoke-Api([string]$path, $query, $req) {
             elseif ($target -eq 'profiles') { $p = $ProfilesDir }
             elseif ($target -eq 'workbuddy') { $p = (Get-EditionHome $edition) }
             elseif ($target -eq 'auth') { $p = $AuthDir }
+            elseif ($target -eq 'app') { $p = $ScriptDir }
             if (Test-Path -LiteralPath $p) { Start-Process explorer.exe $p | Out-Null }
-            return [pscustomobject]@{ ok = $true }
+            return [pscustomobject]@{ ok = $true; path = $p }
         }
 
         '/api/ping' { return [pscustomobject]@{ ok = $true; ts = (Get-NowMs) } }
@@ -2743,117 +3366,259 @@ function Stop-StaleBackend($inst) {
     return $true
 }
 
-function New-AppIcon {
-    # The launcher has no icon of its own, and borrowing WorkBuddy's would suggest
-    # this is WorkBuddy itself. So draw the same "WB" mark the page shows in its
-    # top-left corner and keep it as a small .ico in the data folder.
-    $icoPath = Join-Path $DataDir 'app.ico'
-    if (Test-Path -LiteralPath $icoPath) { return $icoPath }
-    if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
+# Sizes baked into the .ico. The shell does not scale nicely between frames: it
+# takes the one closest to the size it needs and stretches it, so any gap in this
+# list shows up as stair steps on the desktop. A desktop icon is not always 48 or
+# 96 - the size slider allows values like 81 - which is why the ladder is denser
+# than the traditional four, and why 80 sits next to 96: it is the frame an 81px
+# desktop actually lands on.
+$script:AppIconSizes = @(16, 20, 24, 32, 40, 48, 64, 80, 96, 128, 256)
 
+function Get-AppIconInk([System.Drawing.Bitmap]$bmp) {
+    # Bounding box of every pixel that is not transparent. GDI+ centres the font's
+    # line box, not the ink inside it, so "WB" lands a pixel or two left and high
+    # on the small frames. Measuring the ink is the only way to put it dead centre
+    # without hard coding the metrics of one particular font.
+    $w = $bmp.Width
+    $h = $bmp.Height
+    $rect = New-Object System.Drawing.Rectangle -ArgumentList @(0, 0, $w, $h)
+    $data = $bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        $stride = $data.Stride
+        $buf = New-Object byte[] ($stride * $h)
+        [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $buf, 0, $buf.Length)
+    } finally {
+        $bmp.UnlockBits($data)
+    }
+
+    $minX = $w; $maxX = -1; $minY = $h; $maxY = -1
+    for ($y = 0; $y -lt $h; $y++) {
+        $row = $y * $stride
+        for ($x = 0; $x -lt $w; $x++) {
+            if ($buf[$row + ($x * 4) + 3] -gt 8) {
+                if ($x -lt $minX) { $minX = $x }
+                if ($x -gt $maxX) { $maxX = $x }
+                if ($y -lt $minY) { $minY = $y }
+                if ($y -gt $maxY) { $maxY = $y }
+            }
+        }
+    }
+    if ($maxX -lt 0) { return $null }
+    return [pscustomobject]@{ left = $minX; right = $maxX; top = $minY; bottom = $maxY }
+}
+
+function New-AppIconBitmap([int]$size) {
+    # Draw the WB mark at the exact size it will be shown at. Rendering every
+    # frame separately is the whole point: a 48px frame drawn at 48px is sharp,
+    # a 256px frame shrunk to 48px by the shell is not.
     Add-Type -AssemblyName System.Drawing
-    $size = 256
     $bmp = New-Object System.Drawing.Bitmap -ArgumentList @($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $g.Clear([System.Drawing.Color]::Transparent)
 
     # rounded square, same 11/36 corner ratio the page uses
-    $r = [int][Math]::Round($size * 11.0 / 36.0)
-    $d = $r * 2
+    $edge = [double]$size
+    $r = $edge * 11.0 / 36.0
+    if ($r -lt 1.0) { $r = 1.0 }
+    $d = $r * 2.0
     $shape = New-Object System.Drawing.Drawing2D.GraphicsPath
     $shape.AddArc(0, 0, $d, $d, 180, 90)
-    $shape.AddArc($size - $d, 0, $d, $d, 270, 90)
-    $shape.AddArc($size - $d, $size - $d, $d, $d, 0, 90)
-    $shape.AddArc(0, $size - $d, $d, $d, 90, 90)
+    $shape.AddArc($edge - $d, 0, $d, $d, 270, 90)
+    $shape.AddArc($edge - $d, $edge - $d, $d, $d, 0, 90)
+    $shape.AddArc(0, $edge - $d, $d, $d, 90, 90)
     $shape.CloseFigure()
 
     $c1 = [System.Drawing.Color]::FromArgb(255, 0x4a, 0x86, 0xff)
     $c2 = [System.Drawing.Color]::FromArgb(255, 0x2f, 0x4f, 0xf6)
     $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush -ArgumentList @(
         (New-Object System.Drawing.Point -ArgumentList @(0, 0)),
-        (New-Object System.Drawing.Point -ArgumentList @($size, $size)),
+        (New-Object System.Drawing.Point -ArgumentList @([int]$size, [int]$size)),
         $c1, $c2)
     $g.FillPath($brush, $shape)
 
-    $font = New-Object System.Drawing.Font -ArgumentList @('Segoe UI', 92, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+    # "WB" only reads from 32px up. Below that the two letters collapse into an
+    # unreadable smudge, so the small frames carry one large "W" instead - that
+    # is why the tiny icon and the big icon are not simply scaled copies.
+    if ($size -ge 32) { $text = 'WB'; $ratio = 0.36 } else { $text = 'W'; $ratio = 0.70 }
+    # whole pixel font sizes only. A fractional size makes GDI+ spread the stems
+    # over sub-pixels, and at 16-24px that is the difference between a crisp "W"
+    # and a grey smudge.
+    $px = [float][Math]::Round($edge * $ratio)
+    if ($px -lt 6.0) { $px = 6.0 }
+    $font = New-Object System.Drawing.Font -ArgumentList @('Segoe UI', $px, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
     $fmt = New-Object System.Drawing.StringFormat
     $fmt.Alignment = [System.Drawing.StringAlignment]::Center
     $fmt.LineAlignment = [System.Drawing.StringAlignment]::Center
-    $white = New-Object System.Drawing.SolidBrush -ArgumentList @([System.Drawing.Color]::White)
-    $g.DrawString('WB', $font, $white, (New-Object System.Drawing.RectangleF -ArgumentList @(0, 0, $size, $size)), $fmt)
-    $g.Dispose()
 
-    # a 256px icon has to be stored as PNG inside the .ico container
-    $ms = New-Object System.IO.MemoryStream
-    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-    $png = $ms.ToArray()
-    $ms.Dispose()
-    $bmp.Dispose()
+    # The letters go on a transparent layer of their own: measuring them is only
+    # possible while nothing else is on the bitmap, and moving a layer does not
+    # drag the rounded square along with it.
+    $layer = New-Object System.Drawing.Bitmap -ArgumentList @($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $lg = [System.Drawing.Graphics]::FromImage($layer)
+    $lg.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+    $lg.Clear([System.Drawing.Color]::Transparent)
+    $white = New-Object System.Drawing.SolidBrush -ArgumentList @([System.Drawing.Color]::White)
+    $box = New-Object System.Drawing.RectangleF -ArgumentList @([float]0, [float]0, [float]$size, [float]$size)
+    $lg.DrawString($text, $font, $white, $box, $fmt)
+    $lg.Dispose()
+
+    $ink = Get-AppIconInk $layer
+    if ($ink) {
+        $shiftX = [int][Math]::Round(($size - ($ink.right - $ink.left + 1)) / 2.0) - $ink.left
+        $shiftY = [int][Math]::Round(($size - ($ink.bottom - $ink.top + 1)) / 2.0) - $ink.top
+        $g.DrawImageUnscaled($layer, $shiftX, $shiftY)
+    }
+    $g.Dispose()
+    $layer.Dispose()
+
+    $fmt.Dispose()
     $font.Dispose()
     $white.Dispose()
     $brush.Dispose()
     $shape.Dispose()
+    return $bmp
+}
 
-    $fs = [IO.File]::Create($icoPath)
+function Test-AppIconCurrent([string]$path) {
+    # Earlier builds wrote a single 256px frame. Windows then had no matching
+    # frame and scaled that one bitmap down to whatever Explorer asked for
+    # (16 on the taskbar, 32/48 on the desktop), which is exactly the blocky
+    # look this function guards against. Reusing such a file would keep the
+    # artefact forever, so the frame count decides whether it can be reused.
+    try {
+        $fs = [IO.File]::OpenRead($path)
+        try {
+            $buf = New-Object byte[] 6
+            $n = $fs.Read($buf, 0, 6)
+        } finally { $fs.Close() }
+        if ($n -lt 6) { return $false }
+        $count = [int]$buf[4] + ([int]$buf[5] * 256)
+        return ($count -eq $script:AppIconSizes.Count)
+    } catch { return $false }
+}
+
+function New-AppIcon {
+    # The launcher has no icon of its own, and borrowing WorkBuddy's would suggest
+    # this is WorkBuddy itself. So draw the same "WB" mark the page shows in its
+    # top-left corner and keep it as a small .ico in the data folder.
+    $icoPath = Join-Path $DataDir 'app.ico'
+    if (Test-Path -LiteralPath $icoPath) {
+        if (Test-AppIconCurrent $icoPath) { return $icoPath }
+        Write-Log 'app icon: old single frame icon found, rebuilding with every size'
+    }
+    if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
+
+    Add-Type -AssemblyName System.Drawing
+    $frames = @()
+    foreach ($s in $script:AppIconSizes) {
+        $bmp = New-AppIconBitmap $s
+        $ms = New-Object System.IO.MemoryStream
+        $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+        $frames += ,([pscustomobject]@{ size = $s; bytes = $ms.ToArray() })
+        $ms.Dispose()
+        $bmp.Dispose()
+    }
+
+    # An .ico is one directory followed by the raw images. Offsets are absolute,
+    # so they can only be filled in once the header size is known.
+    $offset = 6 + 16 * $frames.Count
+    $tmp = $icoPath + '.tmp'
+    $fs = [IO.File]::Create($tmp)
     $bw = New-Object System.IO.BinaryWriter -ArgumentList @($fs)
-    $bw.Write([uint16]0)      # reserved
-    $bw.Write([uint16]1)      # type: icon
-    $bw.Write([uint16]1)      # one image
-    $bw.Write([byte]0)        # width  0 means 256
-    $bw.Write([byte]0)        # height 0 means 256
-    $bw.Write([byte]0)        # palette
-    $bw.Write([byte]0)        # reserved
-    $bw.Write([uint16]1)      # colour planes
-    $bw.Write([uint16]32)     # bits per pixel
-    $bw.Write([uint32]$png.Length)
-    $bw.Write([uint32]22)     # offset: 6 + 16
-    $bw.Write($png)
-    $bw.Flush()
-    $bw.Close()
-    Write-Log ("app icon written: {0} ({1} bytes)" -f $icoPath, $png.Length)
+    try {
+        $bw.Write([uint16]0)                 # reserved
+        $bw.Write([uint16]1)                 # type: icon
+        $bw.Write([uint16]$frames.Count)     # how many images follow
+        foreach ($f in $frames) {
+            $dim = [int]$f.size
+            # the width and height fields are one byte each, so 256 is stored as 0
+            if ($dim -ge 256) { $bw.Write([byte]0); $bw.Write([byte]0) }
+            else { $bw.Write([byte]$dim); $bw.Write([byte]$dim) }
+            $bw.Write([byte]0)               # palette entries
+            $bw.Write([byte]0)               # reserved
+            $bw.Write([uint16]1)             # colour planes
+            $bw.Write([uint16]32)            # bits per pixel
+            $bw.Write([uint32]$f.bytes.Length)
+            $bw.Write([uint32]$offset)
+            $offset += $f.bytes.Length
+        }
+        foreach ($f in $frames) { $bw.Write($f.bytes) }
+        $bw.Flush()
+    } finally {
+        $bw.Close()
+    }
+    # write to a temp name first: a half written icon is worse than an old one
+    Move-Item -LiteralPath $tmp -Destination $icoPath -Force
+    Write-Log ("app icon written: {0} sizes, {1} bytes" -f $frames.Count, (Get-Item -LiteralPath $icoPath).Length)
     return $icoPath
 }
 
+function New-ShortcutIn([string]$folder, [string]$name, [string]$launchFile, [string]$icon) {
+    $lnk = Join-Path $folder $name
+    $existed = Test-Path -LiteralPath $lnk
+    $shell = $null
+    try { $shell = New-Object -ComObject WScript.Shell } catch { throw 'wscript_missing' }
+    $sc = $shell.CreateShortcut($lnk)
+    $sc.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
+    $sc.Arguments = '"' + $launchFile + '"'
+    $sc.WindowStyle = 1
+    $sc.WorkingDirectory = $ScriptDir
+    $sc.Description = $name
+    if ($icon -and (Test-Path -LiteralPath $icon)) { $sc.IconLocation = ($icon + ',0') }
+    $sc.Save()
+    # CreateShortcut + Save can fail silently when the folder is read-only or
+    # redirected, so verify instead of trusting the COM call.
+    if (-not (Test-Path -LiteralPath $lnk)) { throw 'shortcut_not_written' }
+    return [pscustomobject]@{ ok = $true; path = $lnk; name = $name; existed = $existed; icon = $icon; dir = $folder }
+}
+
 function New-DesktopShortcut {
-    # A .lnk on the desktop that points at the hidden .vbs launcher, so
-    # double-clicking it behaves exactly like the original entry point (including
-    # the single-instance check) and opens no console window at all.
+    # A .lnk that points at the hidden .vbs launcher, so double-clicking it
+    # behaves exactly like the original entry point (including the single
+    # instance check) and opens no console window at all.
     # The launcher name is Chinese, so it is discovered rather than typed.
     $launcher = @(Get-ChildItem -LiteralPath $ScriptDir -Filter '*.vbs' -File -ErrorAction SilentlyContinue |
                   Sort-Object Name | Select-Object -First 1)
     if (-not $launcher.Count) { throw 'launcher_missing' }
     $launchFile = $launcher[0]
 
-    $desktop = [Environment]::GetFolderPath('Desktop')
-    if (-not $desktop -or -not (Test-Path -LiteralPath $desktop)) { throw 'desktop_missing' }
-
     $name = [IO.Path]::GetFileNameWithoutExtension($launchFile.Name)
     # drop the leading verb ("<chinese> ") so the icon reads as the product name
     $m = [regex]::Match($name, '[A-Za-z0-9]')
     if ($m.Success -and $m.Index -gt 0) { $name = $name.Substring($m.Index) }
     $name = $name + '.lnk'
-    $lnk = Join-Path $desktop $name
-    $existed = Test-Path -LiteralPath $lnk
-
-    $shell = $null
-    try { $shell = New-Object -ComObject WScript.Shell } catch { throw 'wscript_missing' }
-    $sc = $shell.CreateShortcut($lnk)
-    $sc.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe')
-    $sc.Arguments = '"' + $launchFile.FullName + '"'
-    $sc.WindowStyle = 1
-    $sc.WorkingDirectory = $ScriptDir
-    $sc.Description = $name
 
     # the program's own WB mark, not WorkBuddy's - otherwise the two look identical
     $icon = ''
     try { $icon = New-AppIcon } catch { Write-Log ('app icon failed: ' + $_.Exception.Message) }
-    if ($icon -and (Test-Path -LiteralPath $icon)) { $sc.IconLocation = ($icon + ',0') }
 
-    $sc.Save()
-    Write-Log ("desktop shortcut: {0}" -f $lnk)
-    return [pscustomobject]@{ ok = $true; path = $lnk; name = $name; existed = $existed; icon = $icon }
+    # Desktop first. If that is unavailable (no profile desktop, OneDrive
+    # redirection that the process cannot see, locked down by policy), fall back
+    # to the folder the program itself lives in: the user still gets something
+    # double-clickable, and the window says where it went.
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $firstError = 'desktop_missing'
+    if ($desktop -and (Test-Path -LiteralPath $desktop)) {
+        try {
+            $r = New-ShortcutIn $desktop $name $launchFile.FullName $icon
+            $r | Add-Member -NotePropertyName fallback -NotePropertyValue $false
+            $r | Add-Member -NotePropertyName reason -NotePropertyValue ''
+            Write-Log ("desktop shortcut: {0}" -f $r.path)
+            return $r
+        } catch {
+            $firstError = $_.Exception.Message
+            Write-Log ('desktop shortcut failed: ' + $firstError)
+        }
+    }
+
+    $r = New-ShortcutIn $ScriptDir $name $launchFile.FullName $icon
+    $r | Add-Member -NotePropertyName fallback -NotePropertyValue $true
+    $r | Add-Member -NotePropertyName reason -NotePropertyValue $firstError
+    Write-Log ("app folder shortcut: {0} (desktop failed: {1})" -f $r.path, $firstError)
+    return $r
 }
 
 # --------------------------------------------------------------------------

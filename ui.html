@@ -121,6 +121,8 @@
   .btn.primary:hover{background:var(--accent-d);border-color:var(--accent-d)}
   .btn.danger{color:var(--red);border-color:#f0d4d4}
   .btn.danger:hover{background:var(--red-soft)}
+  .btn.danger-solid{background:var(--red);border-color:var(--red);color:#fff;box-shadow:0 1px 2px rgba(217,74,74,.28)}
+  .btn.danger-solid:hover{background:#c33f3f;border-color:#c33f3f}
   .btn.sm{height:29px;padding:0 11px;font-size:12px;border-radius:8px}
   .btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
   .btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
@@ -172,6 +174,67 @@
   .rec-item .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rec-item .sz{font-size:11px;color:var(--faint);flex:0 0 auto}
   .rec-scroll{max-height:320px;overflow:auto}
+
+  /* ---------- all sessions window ---------- */
+  .frow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:7px}
+  .frow .lbl{font-size:11px;color:var(--faint);margin-right:2px;min-width:24px}
+  .chip{
+    display:inline-flex;align-items:center;gap:5px;height:25px;padding:0 9px;
+    border:1px solid var(--line);border-radius:13px;background:#fff;color:#48536a;
+    font-family:inherit;font-size:11.5px;line-height:1;cursor:pointer;white-space:nowrap;
+    transition:border-color .12s,background .12s,color .12s;
+  }
+  .chip:hover{border-color:#cfd8e6;background:#f8fafd}
+  .chip.on{background:var(--accent-soft);border-color:#c5d8ff;color:var(--accent);font-weight:600}
+  .chip .n{font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .chip.on .n{color:#4d7ce8}
+  .chip .dotc{width:5px;height:5px;border-radius:50%;background:var(--green);flex:0 0 5px}
+  /* 云端和前三档不是同一个维度，中间竖一道细线：否则「全部」看起来少算了云端 */
+  .chip-sep{width:1px;height:14px;background:var(--line);margin:0 4px}
+
+  .sess-head,.sess-row{
+    display:grid;gap:10px;align-items:center;padding:8px 11px;
+    grid-template-columns:minmax(0,1fr) 60px 76px 104px 164px;
+  }
+  .sess-head{
+    font-size:11px;color:var(--faint);background:#fbfcfe;border-bottom:1px solid var(--line-2);
+    position:sticky;top:0;z-index:2;
+  }
+  .sess-head .r,.sess-row .r{text-align:right}
+  .sess-row{border-bottom:1px solid var(--line-2)}
+  .sess-row:last-child{border-bottom:0}
+  .sess-row:hover{background:#f8fafd}
+  .sess-row .t{min-width:0}
+  .sess-row .t b{display:block;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess-row .t span{display:block;font-size:10.5px;color:var(--faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess-row .t .ttl{display:flex;align-items:center;gap:6px;min-width:0}
+  .sess-row .t .ttl b{flex:0 1 auto;min-width:0}
+  .sess-row .num{font-size:11.5px;color:#6b7688;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+  .sess-box{max-height:44vh;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:10px}
+
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fbfcfe}
+  .seg button{
+    border:0;background:none;font-family:inherit;font-size:11px;color:var(--muted);
+    height:23px;padding:0 7px;line-height:23px;cursor:pointer;white-space:nowrap;
+  }
+  .seg button:hover{background:#eef3fb;color:var(--text)}
+  .seg button.on{color:#fff}
+  .seg button.on[data-st="visible"]{background:#2f6cf6}
+  .seg button.on[data-st="archived"]{background:#8f98a8}
+  .seg button.on[data-st="deleted"]{background:var(--red)}
+  .seg.disabled{opacity:.5}
+  .seg.disabled button{cursor:not-allowed}
+  .seg.disabled button:hover{background:none;color:var(--muted)}
+  .seg.disabled button.on:hover{background:inherit;color:#fff}
+  .seg.disabled button.on[data-st="visible"]:hover{background:#2f6cf6}
+  .seg.disabled button.on[data-st="archived"]:hover{background:#8f98a8}
+  .seg.disabled button.on[data-st="deleted"]:hover{background:var(--red)}
+  /* 云端行不是三档之一：显示成一个只读标记，而不是三档全灭的分段控件 */
+  .seg-ro{
+    display:inline-flex;align-items:center;height:23px;padding:0 8px;border-radius:8px;
+    font-size:11px;color:#6b7688;background:#f2f6fc;border:1px solid var(--line);
+    white-space:nowrap;cursor:default;
+  }
 
   /* ---------- list rows ---------- */
   .row{
@@ -257,6 +320,7 @@
   .modal-wrap{position:fixed;inset:0;background:rgba(20,28,42,.34);display:flex;align-items:center;justify-content:center;z-index:60;padding:26px}
   .modal{background:#fff;border-radius:16px;width:540px;max-width:100%;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(16,24,40,.24)}
   .modal.wide{width:720px}
+  .modal.xwide{width:900px}
   .modal-h{padding:18px 20px 12px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
   .modal-h h3{margin:0;font-size:15px}
   .modal-h p{margin:5px 0 0;font-size:12px;color:var(--muted);line-height:1.6}
@@ -498,6 +562,12 @@ const ERR = {
   manifest_missing:'备份清单缺失，这份备份可能不完整',
   backup_missing:'备份不存在或已被删除',
   nothing_to_recover:'没有可找回的对话',
+  nothing_to_purge:'没有可彻底删除的对话',
+  session_not_found:'这个对话已经不在数据库里了，请刷新后重试',
+  bad_state:'未知的状态值',
+  cloud_session:'云端对话的状态存在服务端，本地改不了',
+  purge_failed:'删除失败，数据库可能没有清理干净',
+  integrity_check_failed:'数据库校验没通过，已中止操作',
   no_database:'找不到对话数据库，客户端可能还没初始化过',
   client_running:'客户端正在运行，请先完全退出',
   process_control_disabled:'当前运行模式不允许操作客户端进程',
@@ -508,6 +578,7 @@ const ERR = {
   exe_not_found:'没找到客户端可执行文件，请手动打开 WorkBuddy',
   launcher_missing:'程序目录里找不到启动用的 .vbs / .cmd 文件',
   desktop_missing:'找不到桌面目录',
+  shortcut_not_written:'快捷方式没能写入目标文件夹（可能是只读或没有权限）',
   wscript_missing:'系统缺少创建快捷方式所需的组件',
   not_logged_in:'当前没有登录账号',
   logout_failed:'清空登录态失败',
@@ -540,7 +611,7 @@ function busy(on, title, desc){
 }
 function modal(html, opts){
   opts = opts || {};
-  $('#modal').className = 'modal' + (opts.wide ? ' wide' : '');
+  $('#modal').className = 'modal' + (opts.wide ? ' wide' : '') + (opts.xwide ? ' xwide' : '');
   $('#modal').innerHTML = html;
   $('#modalWrap').classList.remove('hidden');
   $('#modalWrap').onclick = e => { if(e.target === $('#modalWrap') && !opts.locked) closeModal(); };
@@ -648,6 +719,13 @@ function dayTip(p){
   return parts.join(' · ');
 }
 
+// 备份里的对话数以备份自己的库为准（不含云端）：清单只记了当时侧栏渲染过的
+// 那些，归档和删除的都不在里面，拿它当"对话数"会明显偏少。库读不出来才退回清单。
+function bkCount(b){
+  if(b && typeof b.localCount === 'number' && b.localCount >= 0) return b.localCount;
+  return (b && b.sessionCount) || 0;
+}
+
 function renderSessions(){
   const d = state.data; if(!d) return;
   const ed = curEd();
@@ -717,7 +795,7 @@ function renderSessions(){
           <div class="ttl"><b>${esc(b.createdAt || b.name)}</b>${tag}</div>
           <span>${esc(b.name)} · ${esc(fmtAgo(b.createdAtMs))} · ${b.includeAttachments?'含附件缓存':'仅消息'}</span>
         </div>
-        <div class="num col-size">${b.sessionCount} 个</div>
+        <div class="num col-size" title="${b.localCount >= 0 ? '备份库里全部对话，不含云端' : '备份里没有可读的数据库，这是清单记下的对话数'}">${bkCount(b)} 个</div>
         <div class="num col-time">${fmtBytes(b.totalBytes)}</div>
         <div class="num col-path">${b.accountUinMask? esc(b.accountUinMask) : '—'} <span style="${edStyle}">${esc(prodName(bEd))}</span></div>
         <div class="acts col-owner">
@@ -949,7 +1027,7 @@ $('#btnBackup').onclick = ()=>{
     try{
       const r = await api('/api/backup/create', { includeAttachments: inc, edition: state.edition });
       await load();
-      toast('备份完成（' + edName(r.backup.edition) + '）：' + r.backup.sessionCount + ' 个对话，' + fmtBytes(r.backup.totalBytes), 'ok');
+      toast('备份完成（' + edName(r.backup.edition) + '）：' + bkCount(r.backup) + ' 个对话，' + fmtBytes(r.backup.totalBytes), 'ok');
     }catch(e){ toast('备份失败：' + errText(e.message), 'err'); }
     finally{ busy(false); }
   };
@@ -984,42 +1062,150 @@ async function viewBackup(name){
   try{
     const r = await api('/api/backup/detail?name=' + encodeURIComponent(name));
     busy(false);
-    const list = asArr(r.sessions);
-    // counts come straight from the backup's database: the manifest only lists
-    // what the sidebar showed, so it never mentions archived or deleted ones
-    const c = r.counts || { total: list.length, archived: 0, deleted: 0 };
-    const parts = [];
-    if (c.archived) parts.push(`已归档 ${c.archived}`);
-    if (c.deleted) parts.push(`已删除 ${c.deleted}`);
-    const countText = `全部 ${c.total}` + (parts.length ? `（${parts.join('、')}）` : '');
+
+    // 优先用备份库里读出来的全量清单：manifest 只记录了当时侧栏渲染过的对话，
+    // 归档、删除和云端行都不在里面。数据库读不出来才退回 manifest，那种情况下
+    // 每一条都只能按"可见"显示，状态一栏没有意义。
+    const fromDb = asArr(r.dbSessions).length > 0;
+    const list = fromDb
+      ? asArr(r.dbSessions)
+      : asArr(r.sessions).map(s=>({ ...s, state:'visible', archived:false, deleted:false, cloud:false, shortUid:'', updatedMs:0 }));
+    const c = r.counts || { total: list.length, archived:0, deleted:0, cloud:0 };
+
+    const bkUid = r.backup.accountUid || '';
+    const accOrder = [];
+    const accCount = {};
+    list.forEach(s=>{
+      const k = s.uid || '';
+      if(!(k in accCount)){ accCount[k] = 0; accOrder.push(k); }
+      // 账号后面的数字只数本地对话，和「全部」档对得上；只有云端行的账号
+      // 仍然列出来（数字为 0），点「云端」就能看到那几条。
+      if(!s.cloud) accCount[k]++;
+    });
+    accOrder.sort((a,b)=>{
+      const wa = a === '' ? 1 : 0, wb = b === '' ? 1 : 0;
+      if(wa !== wb) return wa - wb;
+      if((a === bkUid) !== (b === bkUid)) return a === bkUid ? -1 : 1;
+      return accCount[b] - accCount[a];
+    });
+    const filter = { acc: (bkUid && bkUid in accCount) ? bkUid : '*', st:'all' };
+
+    // 云端对话单独一档：选中其它任何一档（含「全部」）都把它排除掉，只有点
+    // 「云端」才显示。云端墓碑（服务端删过、本地留着毫秒戳）算云端不算删除，
+    // 因为它本地本来就改不了、也清不掉，混进「删除」只会误导。
+    const countsFor = acc => {
+      const arr = list.filter(s => acc === '*' || (s.uid || '') === acc);
+      const loc = arr.filter(s => !s.cloud);
+      return {
+        total: loc.length,
+        visible: loc.filter(s=>s.state==='visible').length,
+        archived: loc.filter(s=>s.state==='archived').length,
+        deleted: loc.filter(s=>s.state==='deleted').length,
+        cloud: arr.filter(s=>s.cloud).length
+      };
+    };
+    const chipAcc = (val, label, n, on)=>`<button class="chip ${on?'on':''}" data-acc="${esc(val)}">${label}<span class="n">${n}</span></button>`;
+    const chipSt = (val, label, n, on, tip)=>`<button class="chip ${on?'on':''}" data-st="${esc(val)}" title="${esc(tip||'')}">${label}<span class="n">${n}</span></button>`;
+
+    function renderFilters(){
+      const all = countsFor('*');
+      const accHtml = ['<span class="lbl">账号</span>', chipAcc('*', '全部', all.total, filter.acc === '*')];
+      accOrder.forEach(k=>{
+        const nm = k ? (accCount[k] && k.slice(0,8)) : '未知归属';
+        const label = (k && k === bkUid ? '<span class="dotc"></span>' : '') + esc(k && k === bkUid ? ('备份账号 · ' + nm) : nm);
+        accHtml.push(chipAcc(k, label, accCount[k], filter.acc === k));
+      });
+      $('#bkAcc').innerHTML = accHtml.join('');
+
+      const sc = countsFor(filter.acc);
+      $('#bkSt').innerHTML = ['<span class="lbl">状态</span>',
+        chipSt('all', '全部', sc.total, filter.st === 'all', '本地对话合计（不含云端）'),
+        chipSt('visible', '可见', sc.visible, filter.st === 'visible'),
+        chipSt('archived', '归档', sc.archived, filter.st === 'archived'),
+        chipSt('deleted', '删除', sc.deleted, filter.st === 'deleted'),
+        '<span class="chip-sep"></span>',
+        chipSt('cloud', '云端', sc.cloud, filter.st === 'cloud', '云端对话只在选中这一档时显示')].join('');
+    }
+
+    function rowHtml(s){
+      const nm = s.shortUid || (s.uid ? String(s.uid).slice(0,8) : '未知');
+      const own = (s.uid && s.uid === bkUid)
+        ? '<span class="badge b">备份账号</span>'
+        : `<span class="badge n">${esc(nm)}</span>`;
+      const tags = s.cloud ? '<span class="badge a">云端</span>' : '';
+      return `<div class="sess-row">
+        <div class="t"><div class="ttl"><b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
+          <span>${esc(String(s.id).slice(0,8))} · ${esc(s.slug || s.space || '')}</span></div>
+        <div class="num">${s.hasFile ? fmtBytes(s.bytes) : '<span title="备份里只有这条记录，没有对话文件">仅记录</span>'}</div>
+        <div class="num">${s.updatedMs ? esc(fmtAgo(s.updatedMs)) : '—'}</div>
+        <div>${own}</div>
+        <div>${statusCell(s, false, '这是备份里的状态，这里不能改')}</div>
+      </div>`;
+    }
+
+    function paint(){
+      const rows = list.filter(s=>{
+        if(filter.acc !== '*' && (s.uid || '') !== filter.acc) return false;
+        if(filter.st === 'cloud') return !!s.cloud;   // 云端档只列云端对话
+        if(s.cloud) return false;                     // 其余各档一律不含云端
+        if(filter.st !== 'all' && s.state !== filter.st) return false;
+        return true;
+      });
+      const shown = $('#bkShown');
+      if(shown) shown.textContent = rows.length;
+      $('#bkBox').innerHTML = rows.length
+        ? rows.map(rowHtml).join('')
+        : `<div class="empty" style="padding:26px 10px">没有匹配的对话</div>`;
+    }
+
+    const stateBits = [];
+    if(c.archived) stateBits.push(`归档 ${c.archived}`);
+    if(c.deleted) stateBits.push(`删除 ${c.deleted}`);
+    if(c.cloud) stateBits.push(`云端 ${c.cloud}`);
+    const stateText = stateBits.length ? `（${stateBits.join('、')}）` : '';
+
+    // 标题上的「N 个对话」要和备份列表里那一列取同一个口径：不含云端。
+    // 数据库总行数（含云端）在下面那行「数据库记录 N 个对话」里单独交代。
+    const cloudN = list.filter(s=>s.cloud).length;
+
     modal(`
       <div class="modal-h">
-        <div><h3>${esc(r.backup.createdAt || name)}</h3><p>${esc(name)} · ${c.total} 个对话 · ${fmtBytes(r.backup.totalBytes)}</p></div>
+        <div><h3>${esc(r.backup.createdAt || name)}</h3><p>${esc(name)} · ${list.length - cloudN} 个对话 · ${fmtBytes(r.backup.totalBytes)}</p></div>
         <button class="x" data-close>&times;</button>
       </div>
-      <div class="modal-b">
-        <dl class="kv">
-          <dt>客户端版本</dt><dd>${esc(prodName(r.backup.edition))}</dd>
-          <dt>数据目录</dt><dd style="word-break:break-all">${esc(r.backup.home || '—')}</dd>
-          <dt>归属账号</dt><dd>${esc(r.backup.accountUinMask || '未知')}</dd>
-          <dt>会话数量</dt><dd>${esc(countText)}<span style="display:block;font-size:11px;color:var(--faint);margin-top:2px">这是备份里的全部对话，不区分账号</span></dd>
-          <dt>数据库</dt><dd>${r.database.hasDatabase ? '已包含' : '未包含'}${r.database.hasWal ? '（带未合并日志）' : ''}</dd>
-          <dt>文件数</dt><dd>${r.backup.fileCount}</dd>
-          <dt>附件缓存</dt><dd>${r.backup.includeAttachments ? '包含' : '未包含'}</dd>
-        </dl>
-        <div style="margin:14px 0 6px;font-size:12px;color:var(--faint)">包含的对话</div>
-        <div style="max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:10px">
-          ${list.length ? list.map(s=>`
-            <div style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line-2)">
-              <div style="flex:1;min-width:0">
-                <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title || '（无标题）')}</div>
-                <div style="font-size:11px;color:var(--faint)">${esc(s.space||s.slug||'')}</div>
-              </div>
-              <div style="font-size:11.5px;color:var(--muted)">${fmtBytes(s.bytes)}</div>
-            </div>`).join('') : '<div class="empty">这份备份里没有对话</div>'}
+      <div class="modal-b" style="padding-bottom:10px">
+        <div style="font-size:11.5px;color:var(--faint);line-height:1.75;margin-bottom:9px">
+          ${esc(prodName(r.backup.edition))} · 数据库${r.database.hasDatabase ? '已包含' : '未包含'}${r.database.hasWal ? '（带未合并日志）' : ''} · 文件 ${r.backup.fileCount} 个 · 附件缓存${r.backup.includeAttachments ? '包含' : '未包含'}<br>
+          数据库记录 ${c.total} 个对话${esc(stateText)}　<span style="word-break:break-all">${esc(r.backup.home || '')}</span>
+        </div>
+        ${fromDb ? '' : '<div class="note" style="margin-bottom:9px"><div>这份备份里没有可读的数据库，下面只有清单文件记下的对话，状态无法判断。</div></div>'}
+        <div class="frow" id="bkAcc"></div>
+        <div class="frow" id="bkSt"></div>
+        <div class="sess-box">
+          <div class="sess-head"><div>对话</div><div class="r">大小</div><div class="r">更新</div><div>归属</div><div>状态</div></div>
+          <div id="bkBox"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11.5px;color:var(--faint)">
+          <span>匹配 <b id="bkShown" style="color:var(--accent)">0</b> 个</span>
+          <span style="margin-left:auto">备份是快照，这里的状态不能修改</span>
         </div>
       </div>
-      <div class="modal-f"><button class="btn" data-close>关闭</button></div>`, { wide:true });
+      <div class="modal-f">
+        <button class="btn" data-close>关闭</button>
+        <button class="btn primary" id="bkRestore">恢复这份备份</button>
+      </div>`, { xwide:true });
+
+    renderFilters();
+    paint();
+    $('#bkAcc').onclick = e=>{
+      const b = e.target.closest('.chip'); if(!b) return;
+      filter.acc = b.dataset.acc; renderFilters(); paint();
+    };
+    $('#bkSt').onclick = e=>{
+      const b = e.target.closest('.chip'); if(!b) return;
+      filter.st = b.dataset.st; renderFilters(); paint();
+    };
+    $('#bkRestore').onclick = ()=>{ closeModal(); restoreDialog(name); };
   }catch(e){ busy(false); toast('读取失败：' + errText(e.message), 'err'); }
 }
 
@@ -1053,7 +1239,7 @@ async function restoreDialog(name){
 
   modal(`
     <div class="modal-h">
-      <div><h3>恢复这份备份</h3><p>${esc(prodName(bEd))} · ${esc(bk.createdAt || name)} · ${bk.sessionCount} 个对话 · ${fmtBytes(bk.totalBytes)}</p></div>
+      <div><h3>恢复这份备份</h3><p>${esc(prodName(bEd))} · ${esc(bk.createdAt || name)} · ${bkCount(bk)} 个对话 · ${fmtBytes(bk.totalBytes)}</p></div>
       <button class="x" data-close>&times;</button>
     </div>
     <div class="modal-b">
@@ -1297,33 +1483,325 @@ $('#btnRecover').onclick = async ()=>{
   };
 };
 
+/* ---------- all conversations ---------- */
+const SEG_NAME = { visible:'可见', archived:'归档', deleted:'删除' };
+const ST_ORDER = ['visible','archived','deleted'];
+
+// 状态列。云端行不属于可见/归档/删除任何一档，单独渲染成只读标记——
+// 否则三档全灭，看起来像控件坏了。editable 为 false 时三档仍然显示当前值，
+// 只是灰掉不可点（客户端运行中、或备份查看窗口）。
+function statusCell(s, editable, title){
+  if(s.cloud){
+    // 云端的墓碑行（客户端在服务端删过）会落到"删除"档，这时候写"只读"会跟
+    // 筛选结果自相矛盾，所以徽章跟着实际状态走。
+    const t = s.state === 'deleted' ? '云端 · 已删除'
+            : (s.state === 'archived' ? '云端 · 已归档' : '云端 · 只读');
+    return `<div class="seg-ro" title="云端对话存在服务端，本地改不了">${t}</div>`;
+  }
+  return `<div class="seg ${editable?'':'disabled'}" data-id="${esc(s.id)}" title="${esc(title || (editable?'点击切换状态':'只读'))}">${
+    ST_ORDER.map(k=>`<button data-st="${k}" class="${s.state===k?'on':''}">${SEG_NAME[k]}</button>`).join('')
+  }</div>`;
+}
+
+/* 彻底删除：先列出所有已删除的对话，按账号分组，默认全选 */
+async function openPurgeDialog(edition){
+  busy(true, '读取已删除对话…');
+  let r;
+  try{
+    r = await api('/api/purge/list' + (edition ? '?edition=' + encodeURIComponent(edition) : ''));
+  }catch(e){
+    busy(false);
+    return toast('读取失败：' + errText(e.message), 'err');
+  }
+  busy(false);
+
+  const list = asArr(r.sessions);
+  const accLabel = (r.account && (r.account.nickname || r.account.uinMask)) || '当前账号';
+
+  if(!list.length){
+    modal(`<div class="modal-h"><div><h3>彻底删除对话</h3><p>${esc(prodName(r.edition))} · 当前账号 ${esc(accLabel)}</p></div><button class="x" data-close>&times;</button></div>
+      <div class="modal-b"><div class="empty" style="padding:34px 10px">
+        <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+        <div>没有处于「已删除」状态的对话，暂时不用清理。</div>
+      </div></div>
+      <div class="modal-f"><button class="btn primary" data-close>好</button></div>`);
+    return;
+  }
+
+  const groups = {}, order = [];
+  list.forEach(s=>{
+    const k = s.uid || '';
+    if(!groups[k]){ groups[k] = []; order.push(k); }
+    groups[k].push(s);
+  });
+
+  const groupsHtml = order.map(uid=>{
+    const arr = groups[uid];
+    const f = arr[0];
+    const label = uid
+      ? (f.mine ? ('当前账号 · ' + (f.nickname || f.shortUid || uid.slice(0,8)))
+                : (f.nickname ? (f.nickname + ' · ' + f.shortUid) : (f.shortUid || uid.slice(0,8))))
+      : '未知归属';
+    return `<div class="rec-group">
+      <div class="rec-group-h">
+        <input type="checkbox" data-grp="${esc(uid)}" checked>
+        <span class="who2">${esc(label)}</span>
+        <span class="cnt">${arr.length} 个对话</span>
+      </div>
+      <div class="rec-scroll">
+        ${arr.map(s=>`<label class="rec-item">
+          <input type="checkbox" checked data-rec="${esc(s.id)}" data-of="${esc(uid)}">
+          <span class="tt" title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</span>
+          ${s.archived ? '<span class="badge n">已归档</span>' : ''}
+          <span class="sz">${fmtBytes(s.bytes)}</span>
+        </label>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  modal(`
+    <div class="modal-h">
+      <div><h3 style="color:var(--red)">彻底删除对话</h3><p>${esc(prodName(r.edition))} · 当前账号 ${esc(accLabel)} · 共 ${list.length} 个已删除的对话</p></div>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-b">
+      <label class="check" style="margin-bottom:10px">
+        <input type="checkbox" id="cbPurgeBackup" checked>
+        <span>删除前备份</span>
+      </label>
+      <div class="note danger" style="margin-bottom:12px">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div>勾选的对话会被<b>彻底删除</b>：数据库记录、对话文件、附件缓存和侧栏缓存一起清掉，<b>删掉就找不回来了</b>（除非用上面那份备份恢复）。
+        处理前会自动关闭客户端，<b>正在进行中的任务会被中断</b>；完成后由你决定要不要打开客户端。</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--faint)">已选 <b id="purgeCount" style="color:var(--red)">${list.length}</b> / ${list.length}</span>
+        <button class="btn sm ghost" id="purgeAll" style="margin-left:auto">全选</button>
+        <button class="btn sm ghost" id="purgeNone">全不选</button>
+      </div>
+      ${groupsHtml}
+    </div>
+    <div class="modal-f">
+      <button class="btn" data-close>取消</button>
+      <button class="btn danger-solid" id="doPurge">清空已删除对话</button>
+    </div>`);
+
+  const boxes = ()=> Array.from(document.querySelectorAll('input[data-rec]'));
+  const syncCount = ()=>{
+    const n = boxes().filter(b=>b.checked).length;
+    const el = $('#purgeCount'); if(el) el.textContent = n;
+    document.querySelectorAll('input[data-grp]').forEach(g=>{
+      const kids = boxes().filter(b=>b.dataset.of === g.dataset.grp);
+      const on = kids.filter(b=>b.checked).length;
+      g.checked = on === kids.length;
+      g.indeterminate = on > 0 && on < kids.length;
+    });
+    const btn = $('#doPurge'); if(btn) btn.disabled = n === 0;
+  };
+
+  document.querySelectorAll('input[data-grp]').forEach(g=>{
+    g.onchange = ()=>{
+      boxes().filter(b=>b.dataset.of === g.dataset.grp).forEach(b=>{ b.checked = g.checked; });
+      syncCount();
+    };
+  });
+  boxes().forEach(b=> b.onchange = syncCount);
+  $('#purgeAll').onclick = ()=>{ boxes().forEach(b=>b.checked = true); syncCount(); };
+  $('#purgeNone').onclick = ()=>{ boxes().forEach(b=>b.checked = false); syncCount(); };
+
+  $('#doPurge').onclick = async ()=>{
+    const ids = boxes().filter(b=>b.checked).map(b=>b.dataset.rec);
+    if(!ids.length) return;
+    const cb = $('#cbPurgeBackup');
+    const doBackup = !(cb && !cb.checked);
+    closeModal();
+    busy(true, '正在彻底删除…', doBackup ? '备份 → 关闭客户端 → 删除数据库记录与对话文件' : '关闭客户端 → 删除数据库记录与对话文件');
+    try{
+      const res = await api('/api/purge/apply', { edition: r.edition, ids, backup: doBackup });
+      busy(false);
+      const lines = [`已彻底删除 ${res.purged} 个对话`];
+      if(res.files) lines.push(`清掉 ${res.files} 个对话文件 / 附件目录，释放 ${fmtBytes(res.freed)}`);
+      if(res.skipped) lines.push(`${res.skipped} 个对话已经不在删除状态，已跳过`);
+      if(res.snapshot) lines.push(`删除前的完整备份已存好：${res.snapshot}`);
+      if(res.wasRunning) lines.push('客户端已关闭，等你确认后再打开');
+      doneDialog({
+        title: '彻底删除完成',
+        edition: res.edition || r.edition,
+        lines,
+        note: '这些对话不会再出现在任何账号的列表里，只能靠备份恢复。'
+      });
+    }catch(e){
+      busy(false);
+      toast('删除失败：' + errText(e.message), 'err');
+    }
+  };
+}
+
 $('#btnAllSessions').onclick = async ()=>{
   busy(true, '读取对话列表…');
+  let r;
   try{
-    const r = await api('/api/sessions?limit=300' + (state.edition ? '&edition=' + encodeURIComponent(state.edition) : ''));
+    r = await api('/api/sessions/all' + (state.edition ? '?edition=' + encodeURIComponent(state.edition) : ''));
+  }catch(e){
     busy(false);
-    const list = asArr(r.sessions);
-    modal(`
-      <div class="modal-h"><div><h3>本地对话（${list.length}/${r.total}）</h3><p>${esc(prodName(r.edition || state.edition))} · 按最近活动排序</p></div><button class="x" data-close>&times;</button></div>
-      <div class="modal-b" style="padding-bottom:14px">
-        <input id="q" placeholder="搜索标题 / 路径" style="width:100%;height:34px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:13px;font-family:inherit;outline:none;margin-bottom:10px">
-        <div id="sessBox" style="max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px"></div>
-      </div>
-      <div class="modal-f"><button class="btn" data-close>关闭</button></div>`, { wide:true });
-    const paint = (kw)=>{
-      const f = list.filter(s=> !kw || (s.title||'').toLowerCase().includes(kw) || (s.space||'').toLowerCase().includes(kw));
-      $('#sessBox').innerHTML = f.length ? f.map(s=>`
-        <div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line-2)">
-          <div style="flex:1;min-width:0">
-            <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title||'（无标题）')}</div>
-            <div style="font-size:11px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.space||s.slug)}</div>
-          </div>
-          <div style="font-size:11.5px;color:var(--muted);text-align:right;white-space:nowrap">${fmtBytes(s.bytes)}<br><span style="color:var(--faint)">${esc(fmtAgo(s.updatedMs))}</span></div>
-        </div>`).join('') : '<div class="empty">没有匹配的对话</div>';
+    return toast('读取失败：' + errText(e.message), 'err');
+  }
+  busy(false);
+
+  const list = asArr(r.sessions);
+  const accounts = asArr(r.accounts);
+  const curUid = (r.current && r.current.uid) || '';
+  const running = !!r.running;
+  const filter = { acc: curUid || '*', st: 'all', kw: '' };
+  let changed = false;
+
+  // 云端对话单独一档：其它各档（含「全部」）都不含云端，只有点「云端」才显示。
+  // 云端墓碑（服务端删过、本地还留着毫秒戳）算云端不算删除——它本地改不了也
+  // 清不掉，放进「删除」会让底部的彻底删除看起来能处理它。
+  const countsFor = acc => {
+    const arr = list.filter(s => acc === '*' || (s.uid || '') === acc);
+    const loc = arr.filter(s => !s.cloud);
+    return {
+      total: loc.length,
+      visible: loc.filter(s=>s.state==='visible').length,
+      archived: loc.filter(s=>s.state==='archived').length,
+      deleted: loc.filter(s=>s.state==='deleted').length,
+      cloud: arr.filter(s=>s.cloud).length
     };
-    paint('');
-    $('#q').oninput = e => paint(e.target.value.trim().toLowerCase());
-  }catch(e){ busy(false); toast('读取失败：' + errText(e.message), 'err'); }
+  };
+
+  const chipAcc = (val, label, n, on)=>`<button class="chip ${on?'on':''}" data-acc="${esc(val)}">${label}<span class="n">${n}</span></button>`;
+  const chipSt = (val, label, n, on, tip)=>`<button class="chip ${on?'on':''}" data-st="${esc(val)}" title="${esc(tip||'')}">${label}<span class="n">${n}</span></button>`;
+
+  function renderFilters(){
+    const all = countsFor('*');
+    const accHtml = ['<span class="lbl">账号</span>', chipAcc('*', '全部', all.total, filter.acc === '*')];
+    accounts.forEach(a=>{
+      const key = a.uid || '';
+      const c = countsFor(key);
+      const nm = a.uid ? (a.nickname || a.shortUid || a.uid.slice(0,8)) : '未知归属';
+      const label = (a.mine ? '<span class="dotc"></span>' : '') + esc(a.mine ? ('当前 · ' + nm) : nm);
+      accHtml.push(chipAcc(key, label, c.total, filter.acc === key));
+    });
+    $('#fAcc').innerHTML = accHtml.join('');
+
+    const sc = countsFor(filter.acc);
+    $('#fSt').innerHTML = ['<span class="lbl">状态</span>',
+      chipSt('all', '全部', sc.total, filter.st === 'all', '本地对话合计（不含云端）'),
+      chipSt('visible', '可见', sc.visible, filter.st === 'visible'),
+      chipSt('archived', '归档', sc.archived, filter.st === 'archived'),
+      chipSt('deleted', '删除', sc.deleted, filter.st === 'deleted'),
+      '<span class="chip-sep"></span>',
+      chipSt('cloud', '云端', sc.cloud, filter.st === 'cloud', '云端对话只在选中这一档时显示')].join('');
+  }
+
+  function rowHtml(s){
+    const nm = s.nickname || s.shortUid || (s.uid ? s.uid.slice(0,8) : '未知');
+    const own = s.mine ? '<span class="badge b">当前账号</span>'
+              : (s.uid ? `<span class="badge n">${esc(nm)}</span>` : '<span class="badge n">未知</span>');
+    const tags = s.cloud ? '<span class="badge a">云端</span>' : '';
+    const locked = running || s.cloud;
+    const seg = statusCell(s, !locked, s.cloud ? '云端对话存在服务端，本地改不了'
+                 : (running ? '客户端正在运行，关闭后可切换' : '点击切换状态'));
+    return `<div class="sess-row">
+      <div class="t"><div class="ttl"><b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
+        <span>${esc(s.id.slice(0,8))} · ${esc(s.slug || s.space || '')}</span></div>
+      <div class="num">${fmtBytes(s.bytes)}</div>
+      <div class="num">${esc(fmtAgo(s.updatedMs))}</div>
+      <div>${own}</div>
+      <div>${seg}</div>
+    </div>`;
+  }
+
+  function paint(){
+    const kw = filter.kw;
+    const rows = list.filter(s=>{
+      if(filter.acc !== '*' && (s.uid || '') !== filter.acc) return false;
+      if(filter.st === 'cloud') { if(!s.cloud) return false; }
+      else {
+        if(s.cloud) return false;                   // 除「云端」外各档一律不含云端
+        if(filter.st !== 'all' && s.state !== filter.st) return false;
+      }
+      if(kw){
+        const hay = ((s.title||'') + ' ' + (s.slug||'') + ' ' + (s.space||'')).toLowerCase();
+        if(hay.indexOf(kw) < 0) return false;
+      }
+      return true;
+    });
+    const shown = $('#sessShown');
+    if(shown) shown.textContent = rows.length;
+    $('#sessBox').innerHTML = rows.length
+      ? rows.map(rowHtml).join('')
+      : `<div class="empty" style="padding:26px 10px">没有匹配的对话</div>`;
+  }
+
+  modal(`
+    <div class="modal-h">
+      <div>
+        <h3>本地对话（${list.length}/${r.total}）</h3>
+        <p>${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
+          ? '客户端正在运行，状态列暂时只读'
+          : '客户端未打开，点状态列可直接切换'}</p>
+      </div>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-b" style="padding-bottom:10px">
+      <div class="frow" id="fAcc"></div>
+      <div class="frow" id="fSt"></div>
+      <input id="q" placeholder="搜索标题 / 路径" style="width:100%;height:32px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;font-family:inherit;outline:none">
+      <div class="sess-box">
+        <div class="sess-head"><div>对话</div><div class="r">大小</div><div class="r">更新</div><div>归属</div><div>状态 / 设置</div></div>
+        <div id="sessBox"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11.5px;color:var(--faint)">
+        <span>匹配 <b id="sessShown" style="color:var(--accent)">0</b> 个</span>
+        <span style="margin-left:auto">${running ? '客户端运行中，状态列只读' : '状态列：点一下即时生效'}</span>
+      </div>
+    </div>
+    <div class="modal-f">
+      <button class="btn danger-solid" id="btnPurgeAll">彻底删除</button>
+    </div>`, { xwide:true, onClose: ()=>{ if(changed) load().catch(()=>{}); } });
+
+  renderFilters();
+  paint();
+
+  $('#fAcc').onclick = e=>{
+    const b = e.target.closest('.chip'); if(!b) return;
+    filter.acc = b.dataset.acc; renderFilters(); paint();
+  };
+  $('#fSt').onclick = e=>{
+    const b = e.target.closest('.chip'); if(!b) return;
+    filter.st = b.dataset.st; renderFilters(); paint();
+  };
+  $('#q').oninput = e=>{ filter.kw = e.target.value.trim().toLowerCase(); paint(); };
+
+  $('#sessBox').addEventListener('click', async e=>{
+    const b = e.target.closest('.seg button');
+    if(!b) return;
+    const seg = b.parentElement;
+    const rec = list.find(x=> x.id === seg.dataset.id);
+    if(!rec) return;
+    const next = b.dataset.st;
+    if(rec.state === next) return;
+    if(rec.cloud) return toast('云端对话的状态存在服务端，本地改不了', 'err');
+    if(running) return toast('客户端正在运行，请先关闭客户端再切换状态', 'err');
+
+    seg.classList.add('disabled');
+    try{
+      const res = await api('/api/sessions/state', { edition: r.edition || state.edition, id: rec.id, state: next });
+      rec.state = res.state;
+      rec.archived = res.state === 'archived';
+      rec.deleted = res.state === 'deleted';
+      changed = true;
+      renderFilters(); paint();
+      toast('已切换为「' + SEG_NAME[res.state] + '」', 'ok');
+    }catch(err){
+      toast('切换失败：' + errText(err.message), 'err');
+      paint();
+    }
+  });
+
+  $('#btnPurgeAll').onclick = ()=> openPurgeDialog(r.edition || state.edition);
 };
 
 /* ---------- accounts ---------- */
@@ -1436,6 +1914,11 @@ function openSwitchModal(product, uid, isNew){
   const pn = prodName(product);
   const prof = isNew ? {} : (asArr(state.data.profiles).find(x=> x.uid===uid && x.product===product) || {});
   const who = prof.nickname || prof.uinMask || (uid ? uid.slice(0,8) : '');
+  // 只有「当前确实登录着另一个账号」时才提供顺手搬对话的选项：
+  // 没登录就没有对话可搬，「登录新账号」也没有明确的目标账号
+  const curAcct = edObj.account || null;
+  const curName = curAcct ? (curAcct.nickname || curAcct.uinMask || curAcct.shortUid) : '';
+  const showMove = !isNew && !!curAcct && !!curAcct.uid && curAcct.uid !== uid;
 
   const title = isNew
     ? '<h3 style="color:var(--red)">切换到 新账号？</h3>'
@@ -1455,6 +1938,13 @@ function openSwitchModal(product, uid, isNew){
       <div style="display:flex;gap:8px;margin:4px 0 8px"><span>1</span><span>${step1}</span></div>
       <div style="display:flex;gap:8px;margin:4px 0 8px"><span>2</span><span>关闭 ${esc(pn)} 客户端（另一个版本不受影响）</span></div>
       <div style="display:flex;gap:8px;margin:4px 0 8px"><span>3</span><span>${step3}</span></div>
+      ${showMove ? `<label class="opt" style="margin-top:10px">
+        <input type="checkbox" id="cbMove">
+        <span style="min-width:0">
+          <span class="o-t" style="display:block">将当前登录 ${esc(curName)} 的所有对话，也移动到 ${esc(who || '目标账号')}</span>
+          <span class="o-d" style="display:block">勾选后，${esc(curName)} 名下的全部本地对话（含已归档、已删除）都会改写归属到目标账号。不勾选就只换登录态，对话仍留在原账号名下。</span>
+        </span>
+      </label>` : ''}
       ${running ? `<div class="note warn" style="margin-top:12px">
         <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
         <div>客户端正在运行，${isNew?'退出':'切换'}会关闭它，<b>正在进行中的任务会被中断</b>。</div></div>` : ''}
@@ -1463,14 +1953,18 @@ function openSwitchModal(product, uid, isNew){
     <div class="modal-f"><button class="btn" id="switchOnly">仅切换</button><button class="btn primary" id="doSwitch">切换并重启</button></div>`);
 
   const run = async (restart)=>{
+    const cbMove = $('#cbMove');
+    const moveSessions = !!(cbMove && cbMove.checked);
     closeModal();
     busy(true,
       isNew ? '正在退出当前账号…' : '正在切换账号…',
-      restart ? '关闭客户端 → 替换登录态 → 重新启动' : '关闭客户端 → 替换登录态（不重新打开）');
+      restart
+        ? ('关闭客户端 → 替换登录态' + (moveSessions ? ' → 搬运对话' : '') + ' → 重新启动')
+        : ('关闭客户端 → 替换登录态' + (moveSessions ? ' → 搬运对话' : '') + '（不重新打开）'));
     try{
       const r = isNew
         ? await api('/api/accounts/logout', { product, restart })
-        : await api('/api/accounts/switch', { product, uid, restart });
+        : await api('/api/accounts/switch', { product, uid, restart, moveSessions });
       await load().catch(()=>{});
       busy(false);
       if(isNew){
@@ -1481,12 +1975,17 @@ function openSwitchModal(product, uid, isNew){
           toast(r.restarted ? ('已退出当前账号' + saved + '，客户端正在启动，请登录新账号')
                             : ('已退出当前账号' + saved + '，客户端已关闭'), 'ok');
         }
-      } else if(r.restarted){
-        toast('已切换到 ' + (r.uinMask || who) + '，客户端正在启动', 'ok');
-      } else if(restart){
-        toast('登录态已替换，但客户端没能自动启动：' + errText(r.reason), 'err');
       } else {
-        toast('登录态已替换，客户端已关闭', 'ok');
+        const movedTxt = r.moved ? ('，' + r.moved + ' 个对话已移到该账号') : '';
+        if(r.moveError && moveSessions){
+          toast('登录态已切换，但对话没能搬过去（' + errText(r.moveError) + '）', 'err');
+        } else if(r.restarted){
+          toast('已切换到 ' + (r.uinMask || who) + movedTxt + '，客户端正在启动', 'ok');
+        } else if(restart){
+          toast('登录态已替换' + movedTxt + '，但客户端没能自动启动：' + errText(r.reason), 'err');
+        } else {
+          toast('登录态已替换' + movedTxt + '，客户端已关闭', 'ok');
+        }
       }
     }catch(e){
       busy(false);
@@ -1517,22 +2016,50 @@ $('#profileBox').addEventListener('click', e=>{
 });
 
 /* ---------- misc ---------- */
+async function openAppDir(){
+  try{ await api('/api/open', { target:'app' }); }
+  catch(e){ toast('打不开程序目录：' + errText(e.message), 'err'); }
+}
+
 $('#btnShortcut').onclick = async ()=>{
-  try{
-    const r = await api('/api/shortcut/create', {});
-    modal(`<div class="modal-h"><div><h3>桌面图标已创建</h3></div><button class="x" data-close>&times;</button></div>
-      <div class="modal-b">
-        <div class="note">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.6-4.8"/></svg>
-          <div>桌面上已经建好 <b>${esc(r.name)}</b>，以后双击它就能打开对话管家。<br>
-          <span style="color:var(--faint);word-break:break-all">${esc(r.path)}</span></div>
-        </div>
-        ${r.existed ? '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">桌面上原来就有同名图标，已经更新为当前程序的路径。</div>' : ''}
+  let r = null, msg = '';
+  try{ r = await api('/api/shortcut/create', {}); }
+  catch(e){ msg = errText(e.message); }
+
+  // 三种结果都给「打开应用目录」：桌面建不出来的时候，用户最需要的就是
+  // 找到程序本体在哪，好手动建一个。
+  let title = '桌面图标已创建';
+  let body = '';
+  if(msg){
+    title = '桌面图标创建失败';
+    body = `<div class="note warn">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div>${esc(msg)}<br>可以点下面的「打开应用目录」，在程序所在文件夹里手动把启动文件发送到桌面。</div>
+      </div>`;
+  }else if(r.fallback){
+    title = '图标建在了程序目录';
+    body = `<div class="note warn">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div>桌面不可用（${esc(errText(r.reason))}），已经把 <b>${esc(r.name)}</b> 建在程序所在目录里。<br>
+        <span style="color:var(--faint);word-break:break-all">${esc(r.path)}</span><br>
+        想放到桌面的话，点「打开应用目录」，把它拖过去就行。</div>
+      </div>`;
+  }else{
+    body = `<div class="note">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.6-4.8"/></svg>
+        <div>桌面上已经建好 <b>${esc(r.name)}</b>，以后双击它就能打开对话管家。<br>
+        <span style="color:var(--faint);word-break:break-all">${esc(r.path)}</span></div>
       </div>
-      <div class="modal-f"><button class="btn primary" data-close>好</button></div>`);
-  }catch(e){
-    toast('创建失败：' + errText(e.message), 'err');
+      ${r.existed ? '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">桌面上原来就有同名图标，已经更新为当前程序的路径。</div>' : ''}`;
   }
+
+  modal(`<div class="modal-h"><div><h3>${esc(title)}</h3></div><button class="x" data-close>&times;</button></div>
+    <div class="modal-b">${body}</div>
+    <div class="modal-f">
+      <button class="btn" id="btnOpenAppDir">打开应用目录</button>
+      <button class="btn primary" data-close>好</button>
+    </div>`);
+  $('#btnOpenAppDir').onclick = openAppDir;
 };
 
 $('#btnQuit').onclick = async ()=>{
