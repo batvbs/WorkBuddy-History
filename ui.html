@@ -1069,26 +1069,42 @@ async function viewBackup(name){
     const fromDb = asArr(r.dbSessions).length > 0;
     const list = fromDb
       ? asArr(r.dbSessions)
-      : asArr(r.sessions).map(s=>({ ...s, state:'visible', archived:false, deleted:false, cloud:false, shortUid:'', updatedMs:0 }));
+      : asArr(r.sessions).map(s=>({ ...s, state:'visible', archived:false, deleted:false, cloud:false, shortUid:(s.shortUid||''), updatedMs:0,
+          // 清单里记着做备份时的大小，>0 就说明当时有正文文件。没有这个字段的话，
+          // 所有行都会显示「仅记录」，哪怕大小明明记着。
+          hasFile: ((s.bytes||0) > 0) }));
     const c = r.counts || { total: list.length, archived:0, deleted:0, cloud:0 };
 
-    const bkUid = r.backup.accountUid || '';
+    // 当前登录的账号（按备份所属版本查出来的），归属列只高亮它。
+    const curUid = (r.current && r.current.uid) || '';
     const accOrder = [];
     const accCount = {};
+    const accNick = {};
+    const accShort = {};
     list.forEach(s=>{
       const k = s.uid || '';
       if(!(k in accCount)){ accCount[k] = 0; accOrder.push(k); }
       // 账号后面的数字只数本地对话，和「全部」档对得上；只有云端行的账号
       // 仍然列出来（数字为 0），点「云端」就能看到那几条。
       if(!s.cloud) accCount[k]++;
+      // 昵称由后端按「备份所属的那个版本」查出来——昵称是按 产品:uid 存的，
+      // 拿当前版本去查会查不到。清单兜底的行也带这个字段。
+      if(!accNick[k] && s.nickname) accNick[k] = s.nickname;
+      if(!accShort[k] && s.shortUid) accShort[k] = s.shortUid;
     });
+    // 账号怎么称呼：自己起的昵称 > 短 id > uid 前 8 位。备份里可能一条
+    // 都匹配不上（别的机器上做的备份），这时候只能退回 uid。
+    const accName = k => !k ? '未知归属' : (accNick[k] || accShort[k] || String(k).slice(0,8));
     accOrder.sort((a,b)=>{
       const wa = a === '' ? 1 : 0, wb = b === '' ? 1 : 0;
       if(wa !== wb) return wa - wb;
-      if((a === bkUid) !== (b === bkUid)) return a === bkUid ? -1 : 1;
+      // 当前登录的排最前，其余按条数。备份时的账号不再排到前面：它在这
+      // 一页里和别的账号没有区别。
+      if((a === curUid) !== (b === curUid)) return a === curUid ? -1 : 1;
       return accCount[b] - accCount[a];
     });
-    const filter = { acc: (bkUid && bkUid in accCount) ? bkUid : '*', st:'all' };
+    // 默认停在「全部」：进来看的就是整份备份，不该预先筛成一个账号。
+    const filter = { acc:'*', st:'all' };
 
     // 云端对话单独一档：选中其它任何一档（含「全部」）都把它排除掉，只有点
     // 「云端」才显示。云端墓碑（服务端删过、本地留着毫秒戳）算云端不算删除，
@@ -1104,16 +1120,18 @@ async function viewBackup(name){
         cloud: arr.filter(s=>s.cloud).length
       };
     };
-    const chipAcc = (val, label, n, on)=>`<button class="chip ${on?'on':''}" data-acc="${esc(val)}">${label}<span class="n">${n}</span></button>`;
+    const chipAcc = (val, label, n, on, tip)=>`<button class="chip ${on?'on':''}" data-acc="${esc(val)}" title="${esc(tip||'')}">${label}<span class="n">${n}</span></button>`;
     const chipSt = (val, label, n, on, tip)=>`<button class="chip ${on?'on':''}" data-st="${esc(val)}" title="${esc(tip||'')}">${label}<span class="n">${n}</span></button>`;
 
     function renderFilters(){
       const all = countsFor('*');
       const accHtml = ['<span class="lbl">账号</span>', chipAcc('*', '全部', all.total, filter.acc === '*')];
       accOrder.forEach(k=>{
-        const nm = k ? (accCount[k] && k.slice(0,8)) : '未知归属';
-        const label = (k && k === bkUid ? '<span class="dotc"></span>' : '') + esc(k && k === bkUid ? ('备份账号 · ' + nm) : nm);
-        accHtml.push(chipAcc(k, label, accCount[k], filter.acc === k));
+        // 和「本地对话 → 查看全部」完全一致：当前登录的账号带绿点、前缀「当前 ·」。
+        // 备份时的账号不标记——它在这页里就是普通一员。
+        const mine = !!k && k === curUid;
+        const label = (mine ? '<span class="dotc"></span>' : '') + esc(mine ? ('当前 · ' + accName(k)) : accName(k));
+        accHtml.push(chipAcc(k, label, accCount[k], filter.acc === k, mine ? '当前登录的账号' : ''));
       });
       $('#bkAcc').innerHTML = accHtml.join('');
 
@@ -1128,15 +1146,27 @@ async function viewBackup(name){
     }
 
     function rowHtml(s){
-      const nm = s.shortUid || (s.uid ? String(s.uid).slice(0,8) : '未知');
-      const own = (s.uid && s.uid === bkUid)
-        ? '<span class="badge b">备份账号</span>'
+      const nm = accName(s.uid);
+      // 归属列：当前登录的账号写「当前账号」（和「查看全部」那页一字不差），
+      // 备份时的账号和别的账号一样显示昵称、灰底。
+      const own = (s.uid && s.uid === curUid)
+        ? '<span class="badge b">当前账号</span>'
         : `<span class="badge n">${esc(nm)}</span>`;
       const tags = s.cloud ? '<span class="badge a">云端</span>' : '';
+      // 大小一栏：「仅记录」只表示这份备份里没带上正文文件。云端和「本地文件本来
+      // 就不在」是两回事，tooltip 分开说，否则看起来像是备份丢了东西。
+      const sizeCell = s.hasFile ? fmtBytes(s.bytes)
+        : `<span title="${esc(s.cloud
+            ? '云端对话的正文存在服务端，本地只有一行记录'
+            : '备份里只有数据库记录，没有正文文件：做这份备份时本地已经没有这条对话的文件了')}">仅记录</span>`;
+      // 路径优先用 space（数据库里的 cwd，真正的目录）；slug 是 projects 下的
+      // 目录名，把路径里的分隔符压成了「-」，只能当兜底。
+      const where = s.space || s.slug || '';
+      const sub = where ? (String(s.id).slice(0,8) + ' · ' + where) : String(s.id).slice(0,8);
       return `<div class="sess-row">
         <div class="t"><div class="ttl"><b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
-          <span>${esc(String(s.id).slice(0,8))} · ${esc(s.slug || s.space || '')}</span></div>
-        <div class="num">${s.hasFile ? fmtBytes(s.bytes) : '<span title="备份里只有这条记录，没有对话文件">仅记录</span>'}</div>
+          <span${where ? ` title="${esc(where)}"` : ''}>${esc(sub)}</span></div>
+        <div class="num">${sizeCell}</div>
         <div class="num">${s.updatedMs ? esc(fmtAgo(s.updatedMs)) : '—'}</div>
         <div>${own}</div>
         <div>${statusCell(s, false, '这是备份里的状态，这里不能改')}</div>
@@ -1701,11 +1731,17 @@ $('#btnAllSessions').onclick = async ()=>{
               : (s.uid ? `<span class="badge n">${esc(nm)}</span>` : '<span class="badge n">未知</span>');
     const tags = s.cloud ? '<span class="badge a">云端</span>' : '';
     const locked = running || s.cloud;
+    // 这段以前是 slug 优先，于是列表里显示的是 c-Users-xxx-2026-10-29 这种
+    // projects 下的目录名——它不是路径，只是把路径里的「:」「\」压成了「-」。
+    // space 才是数据库里的 cwd，也就是对话真正的目录。云端行两者都没有，
+    // 这时只显示 id，不要留一个孤零零的分隔点。
+    const where = s.space || s.slug || '';
+    const sub = where ? (s.id.slice(0,8) + ' · ' + where) : s.id.slice(0,8);
     const seg = statusCell(s, !locked, s.cloud ? '云端对话存在服务端，本地改不了'
                  : (running ? '客户端正在运行，关闭后可切换' : '点击切换状态'));
     return `<div class="sess-row">
       <div class="t"><div class="ttl"><b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
-        <span>${esc(s.id.slice(0,8))} · ${esc(s.slug || s.space || '')}</span></div>
+        <span${where ? ` title="${esc(where)}"` : ''}>${esc(sub)}</span></div>
       <div class="num">${fmtBytes(s.bytes)}</div>
       <div class="num">${esc(fmtAgo(s.updatedMs))}</div>
       <div>${own}</div>

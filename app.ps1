@@ -1,5 +1,5 @@
 <#
-  WorkBuddy Keeper 1.5.3
+  WorkBuddy Keeper 1.5.5
   Session backup / restore + account switch for the WorkBuddy desktop client.
   Supports both editions (China and international) side by side.
 
@@ -35,7 +35,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$AppVersion = '1.5.3'
+$AppVersion = '1.5.5'
 
 # --------------------------------------------------------------------------
 # paths
@@ -604,6 +604,19 @@ function Set-Nickname([string]$product, [string]$uid, [string]$nickname) {
     Write-JsonFile $NicknamesPath $obj
     Write-Log ("nickname set: {0} {1} -> {2}" -f $product, $uid, $v)
     return $v
+}
+
+function Find-NicknameAny([hashtable]$map, [string]$uid) {
+    # Backups written before the edition field existed, and backups whose
+    # manifest no longer names a product, still have to be labelled with the
+    # nickname the user typed. The uids are globally unique, so the only key
+    # ending in ':uid' is the right one; a product-qualified lookup is tried
+    # first by the caller and this is the fallback.
+    if (-not $uid) { return '' }
+    foreach ($k in @($map.Keys)) {
+        if ($k.EndsWith(':' + $uid)) { return [string]$map[$k] }
+    }
+    return ''
 }
 
 function Get-DbOwnerCount([string]$dbPath, [string]$uid) {
@@ -2020,12 +2033,21 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
     }
 
     # 2. sessions
-    $all = Get-SessionsIndex $product
+    # Deleted conversations are included on purpose. Deleting a conversation in
+    # the client only marks the row - the transcript stays on disk - so leaving
+    # them out here produced a backup that carried the row but not the text: the
+    # viewer showed "record only" and a restore could not bring the words back.
+    # It mattered most for the snapshot taken right before a purge, which exists
+    # precisely to make those conversations recoverable.
+    $all = Get-SessionsIndex $product -IncludeDeleted
     $sessionEntries = New-Object System.Collections.Generic.List[object]
     foreach ($s in $all) {
         $srcDir = Join-Path (Join-Path $edHome 'projects') $s.slug
         $dstDir = Join-Path (Join-Path $dir 'projects') $s.slug
-        if (-not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+        # A row with no transcript on disk has no slug; do not create a projects
+        # directory for it. The entry still goes into the manifest, it just has
+        # nothing to copy.
+        if ($s.slug -and -not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
 
         $jsonl = Join-Path $srcDir ($s.id + '.jsonl')
         if (Test-Path -LiteralPath $jsonl) {
@@ -2099,17 +2121,38 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
     return (Get-BackupMeta $name)
 }
 
-function Get-BackupSessions([string]$name) {
+function Get-BackupSessions([string]$name, [string]$edition = '') {
     $dir = Join-Path $BackupsDir $name
     $mf = Read-JsonFile (Join-Path $dir 'manifest.json')
     if (-not $mf) { throw 'manifest_missing' }
+    # Same labelling as the database rows: this list is what the viewer falls
+    # back to when the backup holds no readable database, and the account
+    # filter has to read the same either way.
+    if (-not $edition) {
+        if ($mf.edition) { $edition = [string]$mf.edition }
+        elseif ($mf.account -and $mf.account.product) { $edition = [string]$mf.account.product }
+        if (-not (Test-Edition $edition)) { $edition = '' }
+    }
+    $nickMap = Get-NicknameMap
     $list = New-Object System.Collections.Generic.List[object]
     foreach ($s in @($mf.sessions)) {
+        $uid = [string]$s.uid
+        $nick = ''
+        if ($uid) {
+            if ($edition) {
+                $nk = $edition + ':' + $uid
+                if ($nickMap.ContainsKey($nk)) { $nick = [string]$nickMap[$nk] }
+            } else {
+                $nick = Find-NicknameAny $nickMap $uid
+            }
+        }
         $list.Add([pscustomobject]@{
             id        = [string]$s.id
             slug      = [string]$s.slug
             title     = [string]$s.title
-            uid       = [string]$s.uid
+            uid       = $uid
+            shortUid  = (Get-DisplayName $uid)
+            nickname  = $nick
             space     = [string]$s.space
             bytes     = [long]$s.bytes
             updatedAt = [string]$s.updatedAt
@@ -2118,7 +2161,7 @@ function Get-BackupSessions([string]$name) {
     return ,$list.ToArray()
 }
 
-function Get-BackupDbDetail([string]$name) {
+function Get-BackupDbDetail([string]$name, [string]$edition = '') {
     # What the backup really contains, read from the copy of the database inside
     # it rather than from manifest.json. The manifest was written from the
     # sidebar, so it never mentions archived or deleted conversations (and says
@@ -2126,7 +2169,20 @@ function Get-BackupDbDetail([string]$name) {
     #
     # The database is staged first so a backup carrying an unmerged -wal gives
     # the same answer as one that was checkpointed before being copied.
+    #
+    # edition is only needed to resolve nicknames: they are stored per
+    # product:uid, so the viewer has to ask for the product the backup came
+    # from rather than the one that happens to be in front.
     $dir = Join-Path $BackupsDir $name
+    if (-not $edition) {
+        $mfEd = Read-JsonFile (Join-Path $dir 'manifest.json')
+        if ($mfEd) {
+            if ($mfEd.edition) { $edition = [string]$mfEd.edition }
+            elseif ($mfEd.account -and $mfEd.account.product) { $edition = [string]$mfEd.account.product }
+        }
+        if (-not (Test-Edition $edition)) { $edition = '' }
+    }
+    $nickMap = Get-NicknameMap
     $out = [pscustomobject]@{
         counts   = [pscustomobject]@{ total = 0; archived = 0; deleted = 0; cloud = 0; alive = 0 }
         sessions = @()
@@ -2178,13 +2234,24 @@ function Get-BackupDbDetail([string]$name) {
         if ($r.deleted) { $state = 'deleted' }
         elseif ($r.archived) { $state = 'archived' }
         elseif ([string]$r.transport -ne 'local') { $state = 'cloud' }
+        $uid = [string]$r.uid
+        $nick = ''
+        if ($uid) {
+            if ($edition) {
+                $nk = $edition + ':' + $uid
+                if ($nickMap.ContainsKey($nk)) { $nick = [string]$nickMap[$nk] }
+            } else {
+                $nick = Find-NicknameAny $nickMap $uid
+            }
+        }
         $list.Add([pscustomobject]@{
             id        = $sid
             title     = [string]$r.title
             slug      = $slug
             space     = [string]$r.cwd
-            uid       = [string]$r.uid
-            shortUid  = (Get-DisplayName ([string]$r.uid))
+            uid       = $uid
+            shortUid  = (Get-DisplayName $uid)
+            nickname  = $nick
             transport = [string]$r.transport
             state     = $state
             archived  = [bool]$r.archived
@@ -2762,7 +2829,7 @@ function Invoke-Api([string]$path, $query, $req) {
             if (-not $name) { throw 'name_required' }
             $meta = Get-BackupMeta $name
             if (-not $meta) { throw 'backup_missing' }
-            $sessions = Get-BackupSessions $name
+            $sessions = Get-BackupSessions $name ([string]$meta.edition)
             $dir = Join-Path $BackupsDir $name
             $hasDb = Test-Path -LiteralPath (Join-Path $dir 'workbuddy.db')
             $dbInfo = [pscustomobject]@{
@@ -2777,17 +2844,39 @@ function Invoke-Api([string]$path, $query, $req) {
                 sessions = @()
             }
             if ($hasDb) {
-                try { $detail = Get-BackupDbDetail $name }
+                try { $detail = Get-BackupDbDetail $name ([string]$meta.edition) }
                 catch { Write-Log ('backup detail failed: ' + $_.Exception.Message) }
+            }
+            # The account that is logged in right now, for the edition this
+            # backup belongs to. The viewer uses it for exactly one thing: the
+            # ownership column highlights that account and nothing else. The
+            # account the backup was taken under is no longer singled out - it
+            # is just another row in the filter now.
+            $bkEdition = [string]$meta.edition
+            $cur = $null
+            if ($bkEdition) { $cur = Get-CurrentAccount $bkEdition }
+            $curUid = ''
+            $curNick = ''
+            $curUin = ''
+            if ($cur) {
+                $curUid = [string]$cur.uid
+                $curNick = Get-Nickname $bkEdition $curUid
+                $curUin = Mask-Uin ([string]$cur.uin)
             }
             return [pscustomobject]@{
                 ok         = $true
                 backup     = $meta
+                edition    = $bkEdition
                 sessions   = $sessions
                 dbSessions = $detail.sessions
                 hasDbList  = ($detail.sessions.Count -gt 0)
                 database   = $dbInfo
                 counts     = $detail.counts
+                current    = [pscustomobject]@{
+                    uid      = $curUid
+                    nickname = $curNick
+                    uinMask  = $curUin
+                }
             }
         }
 
