@@ -878,9 +878,13 @@ function selectEdition(id){
   renderSessions();
   renderAccounts();
   $('#pageDesc').textContent = descFor(state.page);
-  // 模型清单也是按版本分开的（国内版 / 国际版各一个 models.json），
-  // 换版本就得重新读，否则会把上一个版本的模型显示成当前版本的。
-  if(state.page === 'models'){ mdlState.loaded = false; loadModels().catch(()=>{}); }
+  // 换版本时必须作废模型状态：模型清单按版本分开（国内版 / 国际版各一个
+  // models.json），而卡片上的操作（编辑 / 删除 / 测试）会带上 state.edition
+  // 提交。作废晚一步，用户就可能用「B 的版本号 + A 的模型 id/位置」去改 B。
+  // 所以这里不看当前在哪一页 —— 在模型页就顺手重拉，不在就只作废（下次进
+  // 模型页 setPage 会自己拉），两条路都要把旧的清掉。
+  mdlState.loaded = false;
+  if(state.page === 'models'){ loadModels().catch(()=>{}); }
   loadPreview().then(renderSessions).catch(()=>{});
 }
 const ERR = {
@@ -966,19 +970,98 @@ function busy(on, title, desc){
   if(title) $('#ovT').textContent = title;
   $('#ovD').textContent = desc || '';
 }
+/* ---------- 弹窗焦点管理 ----------
+   遮罩（.modal-wrap）只挡鼠标：背景控件仍能被 Tab 到并激活。开着「删除 A
+   模型」的确认框时，键盘用户能按到背后的「B 版本」胶囊，确认后就带着 B 的
+   state.edition 提交，可能删掉 B 版里的同名模型。三层一起处理：
+     1. 打开时把焦点移进最上层弹窗；
+     2. 背景设 inert（现代浏览器），键盘/指针都够不着；
+     3. Tab / Shift+Tab 在最上层弹窗内循环。
+   关闭时把焦点还回打开前的位置。 */
+let modalReturnFocus = null;
+
+function focusablesIn(root){
+  if(!root) return [];
+  const sel = 'a[href], button:not([disabled]), input:not([disabled]), '
+    + 'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  return Array.prototype.slice.call(root.querySelectorAll(sel))
+    .filter(el => el.offsetWidth > 0 || el.offsetHeight > 0 || el === document.activeElement);
+}
+
+// 当前最上层弹窗容器。判断顺序与 closeTopLayer 一致：自建图层叠在主弹窗
+// 之上优先，没有图层时才是主弹窗。
+function topModalEl(){
+  const top = modalLayers[modalLayers.length - 1];
+  if(top && top.el && document.body.contains(top.el)) return top.el;
+  const mw = $('#modalWrap');
+  return (mw && !mw.classList.contains('hidden')) ? mw : null;
+}
+
+// 背景禁用：body 的直接子元素里，除「最上层弹窗」和 toast 外一律 inert。
+//
+// 注意这里不是简单地「凡弹窗都豁免」：自建图层会叠在主弹窗（#modalWrap）之上，
+// 那时下层主弹窗虽然被盖住、Tab 也进不去，但对读屏之类的辅助技术仍然是可见可
+// 激活的 —— 用户会听到两个弹窗的控件混在一起。所以豁免名单只留最上面那一层，
+// 其余弹窗容器一并 inert（关闭图层后再恢复）。inert 不支持的浏览器会忽略这个
+// 属性，此时由 Tab 焦点陷阱兜底。
+function setBackgroundInert(on){
+  const top = topModalEl();
+  const isLayer = el => el.classList && el.classList.contains('modal-wrap');
+  const isModalWrap = el => el.id === 'modalWrap';
+  Array.prototype.slice.call(document.body.children).forEach(el=>{
+    if(el.id === 'toasts') return;
+    if(isModalWrap(el) || isLayer(el)){
+      // 弹窗容器：只有最上面那层保持可交互，被它盖住的一律 inert。
+      const keep = (el === top);
+      if(on && !keep) el.setAttribute('inert', '');
+      else el.removeAttribute('inert');
+      return;
+    }
+    if(on) el.setAttribute('inert', '');
+    else el.removeAttribute('inert');
+  });
+}
+
+// 打开 / 关闭任一弹窗后同步：背景 inert、焦点落在最上层弹窗里。
+function syncModalState(){
+  const top = topModalEl();
+  setBackgroundInert(!!top);
+  if(!top) return;
+  // 焦点已经在弹窗里就别抢用户的位置（例如刚点了弹窗内的某个按钮）。
+  if(top !== document.body && top.contains(document.activeElement)
+     && document.activeElement !== document.body) return;
+  const f = focusablesIn(top);
+  if(f.length){ f[0].focus(); return; }
+  if(!top.hasAttribute('tabindex')) top.setAttribute('tabindex', '-1');
+  top.focus();
+}
+
+// 关闭最后一层弹窗后，把焦点还给打开它之前那个控件。
+function restoreReturnFocus(){
+  const el = modalReturnFocus;
+  modalReturnFocus = null;
+  if(el && document.contains(el)){ try { el.focus(); return; } catch(e){} }
+  if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+}
+
 function modal(html, opts){
   opts = opts || {};
+  // 第一次打开弹窗（此前没有任何弹窗）时才记下焦点，图层叠上来不覆盖它。
+  if(!topModalEl()) modalReturnFocus = document.activeElement;
   $('#modal').className = 'modal' + (opts.wide ? ' wide' : '') + (opts.xwide ? ' xwide' : '');
   $('#modal').innerHTML = html;
   $('#modalWrap').classList.remove('hidden');
   $('#modalWrap').onclick = e => { if(e.target === $('#modalWrap') && !opts.locked) closeModal(); };
   state.modalOnClose = opts.onClose || null;
+  syncModalState();
 }
 function closeModal(){
   $('#modalWrap').classList.add('hidden');
   $('#modal').innerHTML='';
   const cb = state.modalOnClose;
   state.modalOnClose = null;
+  syncModalState();
+  if(!topModalEl()) restoreReturnFocus();
   if(cb){ try { cb(); } catch(e){} }
 }
 
@@ -990,13 +1073,18 @@ function closeModal(){
    所以按 Esc 时先关最上面那一层。 */
 const modalLayers = [];
 function pushModalLayer(el, onEsc){
+  // 图层叠在主弹窗之上，焦点要跟着进到最上层，键盘够不到被盖住的界面。
+  if(!topModalEl()) modalReturnFocus = document.activeElement;
   modalLayers.push({ el: el, onEsc: onEsc || null });
+  syncModalState();
   return el;
 }
 function popModalLayer(el){
   for(let i = modalLayers.length - 1; i >= 0; i--){
     if(modalLayers[i].el === el){ modalLayers.splice(i, 1); break; }
   }
+  syncModalState();
+  if(!topModalEl()) restoreReturnFocus();
 }
 function closeTopLayer(){
   // 有自建图层就先关它；没有才关主弹窗。
@@ -3264,11 +3352,26 @@ const kToTokens = kStr => {
 };
 
 function openModelEditor(id, index){
-  const isNew = !id;
-  // 按 id + 位置定位：同 id 一可见一隐藏时，用户点「编辑」的是哪一张就编哪一张。
+  // 没 id ≠ 新建：文件里可能是「有 id 但该字段为空串」的条目（后端把 id 强转成
+  // 字符串，空的是 ''，不是 undefined；实测确认），客户端会跳过它，用户点「编辑」
+  // 就是想给它补个 id 启用。传了 index 就说明是列表里已有的一行。所以「有行号」
+  // 或「有 id」都当作已有条目来加载旧值。
+  const editing = (index != null) || !!id;
+  // 定位要编的那一条，按「位置 + 空 id」精确命中（无 id 条目的 id 是空串，空串照样
+  // 参与 === 比较，已实证能命中）。
+  //
+  // 注意不能退化成「按 id 找另一条」：这个列表本来就允许同 id 多行（一可见一隐藏），
+  // 一旦给定的 index 在列表里找不到了（点按钮之后列表被重新读过），按 id 回退会选中
+  // 同 id 的另一行 —— 用户点的是这张卡片，弹出来的却是另一张，保存后就改错了对象，
+  // 而且不会报错。宁可报「这条已经不在了」，也不要替用户挑一条。
   const byIdx = (index == null) ? null : mdlState.list.find(x => x.index === index && x.id === id);
-  const m = isNew ? null : (byIdx || mdlState.list.find(x => x.id === id));
-  if(!isNew && !m){ toast('这条模型已经不在了，请重新读取', 'err'); return; }
+  const m = index == null ? (id ? mdlState.list.find(x => x.id === id) : null) : byIdx;
+  if(editing && !m){ toast('这条模型已经不在了，请重新读取', 'err'); return; }
+  // 是否走「新建」：列表里没有对应的旧条目，或者旧条目的 id 是空的。无 id 条目
+  // 没法按 index 原地改写（后端 save/delete 都要求 originalId 非空，实测），只能
+  // 当作新建，把用户填的 id 写进去。这一条决定 id 框能否编辑、保存走 create 还是
+  // originalId —— 所以它必须和上面的 editing 分开，不能共用一个变量。
+  const isNew = !(m && m.id);
   const val = (f, d) => (m && m[f] != null && m[f] !== '') ? m[f] : (d == null ? '' : d);
   const isEncryptedKey = !!(m && m.apiKeyState === 'encrypted');
 
@@ -3286,7 +3389,7 @@ function openModelEditor(id, index){
   modal(`
     <div class="modal-h">
       <div>
-        <h3>${isNew ? '添加模型' : '编辑模型'}</h3>
+        <h3>${editing ? '编辑模型' : '添加模型'}</h3>
         <p>${isNew
           ? '填好后客户端约 1 秒就会读到它，不用重启。'
           : '只改你在下面动过的字段，其余原样保留。'}</p>
@@ -3923,7 +4026,10 @@ function openModelEditor(id, index){
    测试失败的会自动取消勾选：它多半在那个端点上用不了，不该顺手写进文件。
    这一步不写盘，取消关闭也不会留下任何痕迹。 */
 function openBatchImport(){
-  const st = { url:'', key:'', models:[], picked:new Set(), tested:false, usedUrl:'', csvOk:true, csvPath:'', csvRows:0 };
+  // testSeq：「测试代次」。批量测试每块 await 期间用户可能点「获取列表」换端点，
+  // 那之后在途的老块会因为代次对不上而作废（见 $test / $list）。每次成功取到新列表
+  // 都会 ++，所以每份列表都对应一个唯一代次。
+  const st = { url:'', key:'', models:[], picked:new Set(), tested:false, usedUrl:'', csvOk:true, csvPath:'', csvRows:0, testSeq:0 };
 
   modal(`
     <div class="modal-h">
@@ -3991,15 +4097,29 @@ function openBatchImport(){
   $list.onclick = async ()=>{
     const url = $url.value.trim(), key = $key.value;
     if(!url || !key){ note(false, '还缺信息', '接口地址和 API 密钥都要填上。'); return; }
+    // 用户要换一个端点重新取列表：把正在跑的那轮批量测试作废。代次加一后，
+    // 在途分块回来会发现代次对不上而立刻停手，不再把旧端点的结果画到新表格上。
+    // 顺带把测试按钮和进度条复位，避免上一轮的残留；新列表到达时前面的
+    // st.models = ... 覆盖逻辑天然就是「清空旧表、换成新表」。
+    st.testSeq++;
+    hideProgress();
+    $test.disabled = true;
     busy(true, '正在获取模型列表…', url);
     let r;
     try{
       r = await api('/api/models/batch-list', { url, apiKey: key }, undefined, { allowFail:true });
-    }catch(e){ busy(false); note(false, '获取失败', esc(errText(e.message))); return; }
+    }catch(e){
+      busy(false);
+      // 取新表失败，旧表还在（st.models 没动），把测试入口放开别卡住用户。
+      $test.disabled = !st.models.length;
+      note(false, '获取失败', esc(errText(e.message)));
+      return;
+    }
     busy(false);
 
     if(!r.ok){
       const tried = asArr(r.tried).map(t => `<code>${esc(t.url)}</code> → ${t.status || '连不上'}`).join('<br>');
+      $test.disabled = !st.models.length;
       note(false, '没能拿到模型列表', esc(r.message || r.code) + (tried ? '<br>试过这些地址：<br>' + tried : ''));
       return;
     }
@@ -4130,14 +4250,19 @@ function openBatchImport(){
   // ---------- 测试单个 ----------
   async function testOne(id){
     if(!st.url){ note(false, '先获取列表', '点「获取列表」之后才能测试。'); return; }
+    // 单行测试也有同一个竞态：await 期间点了「获取列表」，结果就属于旧端点，
+    // 不能画到新表格的同名条目上（和批量测试共用同一套代次）。
+    const mySeq = st.testSeq;
     const btn = $box.querySelector(`[data-bi-one="${CSS.escape(id)}"]`);
     if(btn){ btn.disabled = true; btn.textContent = '测试中'; }
     let r;
     try{
       r = await api('/api/models/batch-test', { url: st.url, apiKey: st.key, ids: [id] });
+      if(st.testSeq !== mySeq) return;   // 换代了：丢弃旧结果，新列表已由 $list 重绘
       const one = asArr(r.results)[0] || { id, ok:false, message:'没有返回结果' };
       applyResult(id, one);
     }catch(e){
+      if(st.testSeq !== mySeq) return;
       applyResult(id, { id, ok:false, status:0, message: errText(e.message) });
     }
     st.tested = true;
@@ -4169,6 +4294,10 @@ function openBatchImport(){
     // 每块 8 个，和后端默认并发对齐：块内并行、块间串行，进度因此是台阶式前进的。
     const CHUNK = 8;
     let done = 0, failed = 0;
+    // 记下这轮测试属于哪一代列表。测试是慢请求，期间用户可能点「获取列表」换端点
+    // （那会把 st.testSeq 加一）。代次一变，在途分块的结果就属于旧端点，必须丢掉，
+    // 否则会画到新列表的同名条目上。
+    const mySeq = st.testSeq;
     $test.disabled = true;
     showProgress(0, total, '正在测试…');
     try{
@@ -4180,10 +4309,13 @@ function openBatchImport(){
             url: st.url, apiKey: st.key, ids: slice
           });
         }catch(e){
+          if(st.testSeq !== mySeq) return;   // 已换代：不报错、不重绘，交给新列表
           hideProgress();
           note(false, '批量测试没能进行', esc(errText(e.message)));
           return;
         }
+        // 换代了：立刻停止循环，不再继续后续分块，也不碰已经换成新表的界面。
+        if(st.testSeq !== mySeq) return;
         const byId = {};
         asArr(r.results).forEach(x => { byId[x.id] = x; });
         slice.forEach(mid => { if(byId[mid]) applyResult(mid, byId[mid]); });
@@ -4198,7 +4330,9 @@ function openBatchImport(){
       note(st.picked.size > 0, `测试完成：${st.picked.size} / ${total} 个可用`,
            '失败的行会红字标出来' + extra + '。');
     }finally{
-      $test.disabled = false;
+      // 已换代时不能复位：此时 $list 正在取新表（$test 被它置为 disabled），
+      // 这里再放开就会让用户在旧/空表上点测试。新列表到达时 $list 自己会放开。
+      if(st.testSeq === mySeq) $test.disabled = false;
     }
   };
 
@@ -4377,6 +4511,19 @@ document.addEventListener('click', e=>{
   openNickEditor(wrap, cur);
 }, true);
 
+// 键盘等价：昵称标签是个 role="button" 的 span，浏览器不会替它处理 Enter/Space，
+// 只有上面的 click 委托。所以在它获得焦点时补上键盘激活，行为和鼠标点一下一致。
+// 用 capture 且只认带 role 的 .nick（不动真正是 <button> 的「+ 添加昵称」）。
+document.addEventListener('keydown', e=>{
+  if(e.key !== 'Enter' && e.key !== ' ') return;
+  const chip = e.target.closest && e.target.closest('.nick');
+  if(!chip || !chip.getAttribute('role')) return;
+  const wrap = chip.closest('.nick-wrap');
+  if(!wrap || wrap.querySelector('.nick-input')) return;
+  e.preventDefault();
+  openNickEditor(wrap, chip.querySelector('.t') ? chip.querySelector('.t').textContent : '');
+}, true);
+
 /* 切换账号 / 登录新账号 共用同一个确认弹窗：只有标题和第 3 步不同 */
 function openSwitchModal(product, uid, isNew){
   const edObj = editions().find(e=>e.id===product) || {};
@@ -4543,6 +4690,22 @@ $('#modalWrap').addEventListener('click', e=>{
   if(e.target.closest('[data-close]')) closeModal();
 });
 document.addEventListener('keydown', e=>{ if(e.key === 'Escape') closeTopLayer(); });
+// Tab / Shift+Tab 只在最上层弹窗内循环，别跑到背景控件上（背景已 inert，
+// 这里再兜一层，兼容不支持 inert 的浏览器）。没有弹窗时不拦。
+document.addEventListener('keydown', e=>{
+  if(e.key !== 'Tab') return;
+  const top = topModalEl();
+  if(!top) return;
+  const f = focusablesIn(top);
+  if(!f.length){ e.preventDefault(); return; }
+  const first = f[0], last = f[f.length - 1];
+  const cur = document.activeElement;
+  if(!top.contains(cur)){          // 焦点不在弹窗里（例如刚被移走）：拉回来
+    e.preventDefault(); first.focus(); return;
+  }
+  if(e.shiftKey && cur === first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey && cur === last){ e.preventDefault(); first.focus(); }
+}, true);
 
 setInterval(()=>{ fetch('/api/ping?t=' + encodeURIComponent(TOKEN)).catch(()=>{}); }, 3000);
 
