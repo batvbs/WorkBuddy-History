@@ -126,7 +126,7 @@ deep-research-max-preview-04-2026,是,是,是,,,131072,65536,否,Google Gemini
 llama-3.1-8b-instant,是,否,否,,,131072,131072,否,Groq
 llama-3.3-70b-versatile,是,否,否,,,131072,32768,否,Groq
 
-# ---- 腾讯混元（开源，用户可能自行部署）----
+# ---- 腾讯混元 ----
 hunyuan-2.0-instruct,是,否,否,,,,,否,Hunyuan
 hunyuan-2.0-thinking,是,否,是,,,,,否,Hunyuan
 hunyuan-t1,是,否,是,,,,,否,Hunyuan
@@ -138,12 +138,15 @@ hy3*,是,否,是,,,192000,128000,否,Hunyuan
 hy4,是,否,是,,,983040,65536,否,Hunyuan
 hy4-preview,是,否,是,,,983040,65536,否,Hunyuan
 hy4*,是,否,是,,,983040,65536,否,Hunyuan
+# ---- 小米 MiMo ----
 mimo-v2.5-pro,是,否,是,,,1000000,131072,否,Custom
 mimo-v2.6-pro,是,是,是,,,1000000,131072,否,Custom
 mimo-v2.6-flash,是,是,是,,,1000000,131072,否,Custom
 mimo-*,是,是,是,,,1000000,131072,否,Custom
+# ---- 阶跃 Step ----
 step-5-preview,是,是,是,,,1000000,65536,否,Custom
 step-*,是,是,是,,,1000000,65536,否,Custom
+# ---- 带来源前缀的 DeepSeek（客户端里有 deepseek/deepseek-flash 这种写法）----
 deepseek/deepseek-flash,是,是,是,高|极致,高,1000000,384000,否,DeepSeek
 deepseek/deepseek-v4-flash-vision-exp,是,是,是,高|极致,高,1000000,384000,否,DeepSeek
 deepseek/*,是,是,是,高|极致,高,1000000,384000,否,DeepSeek
@@ -225,7 +228,12 @@ claude-opus*,是,是,是,,,1000000,128000,否,Claude
 claude-haiku*,是,是,是,,,200000,64000,否,Claude
 */claude-haiku*,是,是,是,,,200000,64000,否,Claude
 *.claude-haiku*,是,是,是,,,200000,64000,否,Claude
-# sonnet 家族兜底：4.6 起是 100 万；4 / 4.5 在个别渠道只有 20 万，取大的这边
+# sonnet-4 / 4-5 本尊在部分渠道只有 20 万。这里用「精确行」（整串相等），
+# 不能写成 claude-sonnet-4* 通配 —— 那会把 4-5-20250929 / 4.5 / 4.6 这些
+# 100 万的也一起套成 20 万（实测：通配对 12 条错 15 条，精确行只动 2 条且都对）。
+claude-sonnet-4,是,是,是,,,200000,64000,否,Claude
+claude-sonnet-4-5,是,是,是,,,200000,64000,否,Claude
+# sonnet 家族兜底：4.6 起是 100 万
 claude-*,是,是,是,,,1000000,64000,否,Claude
 */claude-*,是,是,是,,,1000000,64000,否,Claude
 *.claude-*,是,是,是,,,1000000,64000,否,Claude
