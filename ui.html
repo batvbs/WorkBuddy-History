@@ -50,14 +50,18 @@
   .iconbtn-mini.spin svg{animation:spin .6s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   .nav{display:flex;flex-direction:column;gap:4px}
-  .nav a{
+  /* 用 button 而不是不带 href 的 a：后者不可聚焦、回车也没反应，
+     键盘用户根本到不了这两个入口。这里把两套标签统一成同一个外观。 */
+  .nav a,.nav button{
     display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;
     color:#3c4658;text-decoration:none;cursor:pointer;font-size:13.5px;transition:background .12s,color .12s;
+    background:none;border:0;width:100%;text-align:left;font-family:inherit;
   }
-  .nav a svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
-  .nav a:hover{background:#f4f7fc}
-  .nav a.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
-  .nav a.active svg{opacity:1}
+  .nav a svg,.nav button svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+  .nav a:hover,.nav button:hover{background:#f4f7fc}
+  .nav a.active,.nav button.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .nav a.active svg,.nav button.active svg{opacity:1}
+  .nav button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .side-foot{margin-top:auto;padding-top:14px;border-top:1px solid var(--line-2);display:flex;align-items:center;justify-content:space-between;gap:8px}
   .side-foot .ver{font-size:11.5px;color:var(--faint)}
   .linkbtn{background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:4px 6px;border-radius:6px;font-family:inherit}
@@ -661,18 +665,18 @@
       </div>
     </div>
     <nav class="nav">
-      <a data-page="sessions" class="active">
+      <button type="button" data-page="sessions" class="active">
         <svg viewBox="0 0 24 24"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h4l2 2.5h7A1.5 1.5 0 0 1 20 10v7.5A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z"/><path d="M4 11h16"/></svg>
         对话备份
-      </a>
-      <a data-page="accounts">
+      </button>
+      <button type="button" data-page="accounts">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.4"/><path d="M4.8 19.2a7.4 7.4 0 0 1 14.4 0"/></svg>
         账号切换
-      </a>
-      <a data-page="models">
+      </button>
+      <button type="button" data-page="models">
         <svg viewBox="0 0 24 24"><path d="M12 3.2 20 7.6v8.8L12 20.8 4 16.4V7.6z"/><path d="M12 12 20 7.6M12 12v8.8M12 12 4 7.6"/></svg>
         模型管理
-      </a>
+      </button>
     </nav>
     <div class="side-foot">
       <span class="ver" id="ver">v—</span>
@@ -809,6 +813,10 @@
 const TOKEN = '__WB_TOKEN__';
 const ED_KEY = 'wb.keeper.edition';
 const state = { data:null, page:'sessions', edition:null, sessionsPreview:[], previewEdition:null };
+// 预览请求的代次。见 loadPreview：A→B→A 这样切回同一个版本时，光比 edition
+// 分不出「新的 A」和「早先那次 A 的迟到响应」，两者版本都一样；靠序号才能认出
+// 哪次请求是最新的。
+let previewSeq = 0;
 
 /* ---------- utils ---------- */
 const $ = (s,r=document)=>r.querySelector(s);
@@ -923,13 +931,26 @@ const errText = e => {
 };
 
 /* ---------- http ---------- */
-async function api(path, body, method){
+/* opts.allowFail：把「探测失败」当成正常返回交回调用方。
+   探测类接口（test-chat / test / batch-list）失败时返回的是 HTTP 200 +
+   ok:false + code/message/tried/reply，没有 error 字段。统一在这里 throw 的话，
+   调用方拿不到那几个字段，界面只能显示「请求失败」，地址框不会标红、
+   试过的地址列表也丢了。所以要能按调用点选择「不抛、原样返回」。
+
+   注意：能交回调用方的只有「HTTP 成功的探测失败」。后端抛异常时走的是
+   dispatcher 的 catch 分支，返回 HTTP 400/403/404 + {ok:false,code:'error',
+   error:'...'}，没有 message/tried —— 那不是「探测结果」，是「请求根本没能
+   进行」。所以 allowFail 只在 r.ok 为真（2xx）时才原样返回 body；非 2xx
+   一律照旧抛异常。HTTP 状态码是区分这两者的唯一可靠依据，不要靠字段名
+   （有没有 message）去猜。 */
+async function api(path, body, method, opts){
   const url = path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN);
   const opt = { method: method || (body ? 'POST' : 'GET'), headers:{} };
   if(body){ opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   const r = await fetch(url, opt);
   let j;
   try { j = await r.json(); } catch(e){ throw new Error('服务未响应'); }
+  if(j && j.ok === false && opts && opts.allowFail && r.ok) return j;
   if(!j || j.ok === false) throw new Error(j && j.error ? j.error : '请求失败');
   return j;
 }
@@ -959,6 +980,36 @@ function closeModal(){
   const cb = state.modalOnClose;
   state.modalOnClose = null;
   if(cb){ try { cb(); } catch(e){} }
+}
+
+/* 盖在主弹窗之上的临时图层（选模型、同名确认、测试没过仍要保存……）。
+   它们各自 document.createElement 一个 .modal-wrap 叠上来，z-index 比主弹窗高，
+   但都不处理 Esc。以前全局 Esc 一律调 closeModal()：图层开着的时候按 Esc，
+   关掉的是**下面**那个主弹窗，图层还杵在那儿，再点图层的按钮就会
+   去操作一个已经被清空的主弹窗（g('#mf_...') 拿到 null，直接 TypeError）。
+   所以按 Esc 时先关最上面那一层。 */
+const modalLayers = [];
+function pushModalLayer(el, onEsc){
+  modalLayers.push({ el: el, onEsc: onEsc || null });
+  return el;
+}
+function popModalLayer(el){
+  for(let i = modalLayers.length - 1; i >= 0; i--){
+    if(modalLayers[i].el === el){ modalLayers.splice(i, 1); break; }
+  }
+}
+function closeTopLayer(){
+  // 有自建图层就先关它；没有才关主弹窗。
+  const top = modalLayers[modalLayers.length - 1];
+  if(top){
+    if(top.onEsc){
+      try { top.onEsc(); return; } catch(e){}
+    }
+    try { top.el.remove(); } catch(e){}
+    popModalLayer(top.el);
+    return;
+  }
+  closeModal();
 }
 
 const START_REASON = {
@@ -1089,9 +1140,18 @@ function renderSessions(){
     : '备份内容包括对话数据库、全部本地对话文件与账号快照';
 
   const listEl = $('#sessionList');
-  const items = asArr(state.sessionsPreview);
+  // 预览属于哪个版本。换版本时 selectEdition 会先 renderSessions() 再等 loadPreview()，
+  // 这一步如果直接画 state.sessionsPreview，画的就是上一个版本的会话，
+  // 而「当前账号 / 其他账号」却按新版本的 mineUid 去比 —— 归错人。
+  // 版本对不上就当作「还没数据」，宁可先空着。
+  const cached = (state.previewEdition && state.previewEdition !== state.edition);
+  const items = cached ? [] : asArr(state.sessionsPreview);
   if(!items.length){
-    listEl.innerHTML = `<div class="empty">
+    listEl.innerHTML = cached
+      ? `<div class="empty">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+      <div>正在读取这个版本的对话…</div></div>`
+      : `<div class="empty">
       <svg viewBox="0 0 24 24"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h4l2 2.5h7A1.5 1.5 0 0 1 20 10v7.5A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z"/></svg>
       <div>没有扫描到本地对话</div></div>`;
   } else {
@@ -1244,11 +1304,20 @@ function render(){
 /* ---------- load ---------- */
 async function loadPreview(){
   const ed = state.edition;
+  // 同 loadModels：换版本时先发的预览请求可能后到，会把上一个版本的会话列表
+  // 写进 state.sessionsPreview，于是当前版本下面显示的是另一版本的会话，
+  // 「当前账号 / 其他账号」也会按错误的账号去比。回来后版本已经变了就丢。
+  // 另外还要认请求序号：A→B→A 快速切换时两次 A 的 ed 校验都能过，但早先那次
+  // A 的响应若后到，会把新的预览覆盖成旧的，屏幕上留下过时数据。序号不是最新
+  // 就一起丢掉。
+  const seq = ++previewSeq;
   try {
     const s = await api('/api/sessions?limit=8' + (ed ? '&edition=' + encodeURIComponent(ed) : ''));
+    if(seq !== previewSeq || ed !== state.edition) return;
     state.sessionsPreview = asArr(s.sessions);
     state.previewEdition = s.edition || ed;
   } catch(e){
+    if(seq !== previewSeq || ed !== state.edition) return;
     state.sessionsPreview = [];
     state.previewEdition = ed;
   }
@@ -1317,7 +1386,7 @@ function descFor(p){
 const PAGE_TITLE = { sessions:'对话备份与恢复', accounts:'账号切换', models:'模型管理' };
 function setPage(p){
   state.page = p;
-  document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active', a.dataset.page===p));
+  document.querySelectorAll('.nav [data-page]').forEach(a=>a.classList.toggle('active', a.dataset.page===p));
   ['sessions','accounts','models'].forEach(k=>{
     const el = document.getElementById('page-' + k);
     if(el) el.classList.toggle('hidden', p!==k);
@@ -1329,7 +1398,7 @@ function setPage(p){
   // 首次进入顺带把「同 id 都可见」的历史冲突修掉（保留客户端会用的那条，其余改成隐藏）。
   if(p === 'models') loadModels({ repair:true }).catch(()=>{});
 }
-document.querySelectorAll('.nav a').forEach(a=> a.onclick = ()=> setPage(a.dataset.page));
+document.querySelectorAll('.nav [data-page]').forEach(a=> a.onclick = ()=> setPage(a.dataset.page));
 
 /* ---------- backup ---------- */
 $('#btnBackup').onclick = ()=>{
@@ -1627,7 +1696,7 @@ async function restoreDialog(name){
         <div class="o-d">把对话库回滚到备份时刻：备份之后的对话会从列表里消失。恢复前会自动给当前状态再做一份备份。</div></div></label>
       <label class="opt"><input type="radio" name="rmode" value="sync">
         <div><div class="o-t">按时间同步</div>
-        <div class="o-d">两边都有的对话逐条比：<b>备份里更大且更新</b>的，用备份那份覆盖；<b>大小和时间都一样</b>的不动。
+        <div class="o-d">两边都有的对话逐条比：<b>备份里更大且更新</b>的，用备份那份覆盖；<b>本机这份更大且更新</b>的保持不动（备份那份更旧更小，说明本机已经往前走了）；<b>大小和时间完全一样</b>的也不动。
           其余情况（比如更新但更小、更大但更旧）拿不准谁更好，会<b>列出来让你自己定</b>，不替你选。
           备份里有、这边没有的会补进来；这边有、备份里没有的<b>不删</b>。和完整恢复一样，动手前强制备份。</div></div></label>
       <label class="opt"><input type="radio" name="rmode" value="merge">
@@ -1708,7 +1777,7 @@ async function restoreDialog(name){
       + '备份里共 <b>' + p.total + '</b> 个对话：'
       + '<b>' + p.pushCount + '</b> 个会用备份覆盖（备份那侧更大且更新），'
       + '<b>' + p.addCount + '</b> 个是这边没有的（直接补进来），'
-      + '<b>' + p.keepCount + '</b> 个完全一样（不动）'
+      + '<b>' + p.keepCount + '</b> 个不动（两份一样，或者本机那份既更大又更新）'
       + (p.conflictCount ? '，<b>' + p.conflictCount + '</b> 个拿不准——下面列出来了，这些<b>不会</b>被改动' : '')
       + '。</div>';
 
@@ -1818,8 +1887,11 @@ $('#btnRecover').onclick = async ()=>{
   const groups = {};
   const order = [];
   list.forEach(s=>{
-    if(!groups[s.uid]){ groups[s.uid] = []; order.push(s.uid); }
-    groups[s.uid].push(s);
+    // 和「彻底删除」那边一样先归一化：后端可能给出不带 uid 的条目，
+    // 直接 uid.slice() 会在点击回调里抛 TypeError，弹窗根本打不开。
+    const k = s.uid || '';
+    if(!groups[k]){ groups[k] = []; order.push(k); }
+    groups[k].push(s);
   });
 
   const stateTag = s => s.state === 'archived' ? '<span class="badge n">已归档</span>'
@@ -1829,9 +1901,11 @@ $('#btnRecover').onclick = async ()=>{
   const groupsHtml = order.map(uid=>{
     const arr = groups[uid];
     const f = arr[0];
+    // uid 可能是空串（未知归属），这里和后端给的 shortUid 一起兜底
+    const short = f.shortUid || (uid ? uid.slice(0,8) : '未知归属');
     const label = f.mine
-      ? ('当前账号 · ' + (f.nickname || f.shortUid || uid.slice(0,8)))
-      : (f.nickname ? (f.nickname + ' · ' + f.shortUid) : (f.shortUid || uid.slice(0,8)));
+      ? ('当前账号 · ' + (f.nickname || short))
+      : (f.nickname ? (f.nickname + ' · ' + short) : short);
     const on = arr.filter(s=> s.defaultOn !== false).length;
     return `<div class="rec-group">
       <div class="rec-group-h">
@@ -2271,6 +2345,9 @@ $('#btnAllSessions').onclick = async ()=>{
         所以每次保存后端都会先校验再原子替换；
      2. 客户端盯着文件变化（约 1 秒防抖）自动重读，所以这里改完不需要重启。 */
 let mdlState = { list: [], code:'', path:'', loadable:true, exists:true };
+// 「读取模型」的代次。快速切换版本时先发的请求可能后到，靠它判断回来的响应是不是
+// 最新那次，不是就丢掉（见 loadModels）。
+let mdlLoadSeq = 0;
 
 function mdlEffortList(m){
   const s = asArr(m.supportedEfforts).map(x=>String(x).trim()).filter(Boolean);
@@ -2409,12 +2486,14 @@ function renderModels(){
       return nm.includes('-') ? nm.slice(0, nm.indexOf('-')).trim() : nm;
     })();
     const showNote = noteName && noteName !== String(m.id || '');
-    const tres = mdlTestResults[m.id];
+    // 结果按「id + 位置」取：同 id 一可见一隐藏时，只按 id 会把结果显示到
+    // 另一张卡片上（隐藏那条在数组里可能排在前面）。
+    const tres = mdlTestResults[mdlTestKey(m)];
     // 测试结果放在「接口」那一行的右边（见下面的 .ln），不再另起一行。
     // 用 span 而不是 div：它的父元素是 flex 行，div 会强制换行。
     let resHtml = '';
-    if(tres === 'busy') resHtml = '<span class="tres busy" data-tres="' + esc(m.id) + '">测试中…</span>';
-    else if(tres) resHtml = `<span class="tres ${tres.ok ? 'ok' : 'bad'}" data-tres="${esc(m.id)}" title="${esc(tres.detail || tres.text || '')}">${esc(tres.text)}</span>`;
+    if(tres === 'busy') resHtml = '<span class="tres busy" data-tres="' + esc(mdlTestKey(m)) + '">测试中…</span>';
+    else if(tres) resHtml = `<span class="tres ${tres.ok ? 'ok' : 'bad'}" data-tres="${esc(mdlTestKey(m))}" title="${esc(tres.detail || tres.text || '')}">${esc(tres.text)}</span>`;
     // data-mdl-idx 是这条模型在文件数组里的位置。同 id 一可见一隐藏时，
     // 只有「id + 位置」才能唯一定位用户点的那一张卡片。
     return `<div class="mdl${hidden ? ' off' : ''}" data-mdl-card="${esc(m.id)}" data-mdl-idx="${Number.isInteger(m.index) ? m.index : ''}">
@@ -2484,47 +2563,71 @@ function renderModels(){
 /* ---------- 卡片上的「测试」 ----------
    和编辑弹窗里的「测试对话」走同一条链路：先看返回码，再看能不能真的回话。
    结果就地显示在三个按钮的正下方，不去动别的卡片。 */
-const mdlTestResults = {};
+// 用 let 而不是 const：换一份配置（loadModels 成功读到新的 models.json）时要整体
+// 置空，见 loadModels。键是「id#位置」，同 id 同位置的条目在新配置里会命中上一份
+// 配置的结果，显示成旧的「可用/不可用」。
+let mdlTestResults = {};
+// 结果键：id + '#' + 位置。同 id 一可见一隐藏时，只按 id 会把结果显示到
+// 另一张卡片上（隐藏那条在数组里可能排在前面）；改、删、隐藏都按「id + 位置」
+// 定位，测试也必须一致，否则四者会指向不同的条目。
+function mdlTestKey(m){
+  return String(m && m.id || '') + '#' + (Number.isInteger(m && m.index) ? m.index : '');
+}
 async function testModelRow(id, index){
-  if(mdlTestResults[id] === 'busy') return;
   const byIdx = (index == null) ? null : mdlState.list.find(x => x.index === index && x.id === id);
   const m = byIdx || mdlState.list.find(x => x.id === id);
   if(!m){ toast('这条模型已经不在了，请重新读取', 'err'); return; }
-  mdlTestResults[id] = 'busy';
-  paintTestResult(id);
+  const key = mdlTestKey(m);
+  if(mdlTestResults[key] === 'busy') return;
+  // 记下这次测试属于哪一代配置（mdlLoadSeq 每次 loadModels 递增）。测试是慢请求，
+  // 回来时配置可能已经换了（重新读取 / 切版本）。那时 key（id#位置）可能在新配置里
+  // 指向另一条模型，写结果就会把「旧模型的测试结果」画到新卡片上。代次变了就丢掉：
+  // 不写结果、也不 paintTestResult。
+  const gen = mdlLoadSeq;
+  mdlTestResults[key] = 'busy';
+  paintTestResult(key);
   let r;
   try{
     r = await api('/api/models/test-chat', {
-      edition: state.edition, originalId: id,
+      edition: state.edition, originalId: id, index: (Number.isInteger(m.index) ? m.index : null),
       model: { id, url: m.url || '', apiKey:'', useCustomProtocol: !!m.useCustomProtocol }
-    });
+    }, undefined, { allowFail:true });
   }catch(e){
-    mdlTestResults[id] = { ok:false, text:'测试失败：' + errText(e.message) };
-    paintTestResult(id);
+    if(gen !== mdlLoadSeq) return;
+    mdlTestResults[key] = { ok:false, text:'测试失败：' + errText(e.message) };
+    paintTestResult(key);
     return;
   }
+  if(gen !== mdlLoadSeq) return;
   if(r && r.ok){
     const bits = ['可用'];
     if(r.status) bits.push('HTTP ' + r.status);
     if(r.elapsedMs) bits.push(r.elapsedMs + 'ms');
-    mdlTestResults[id] = { ok:true, text: bits.join(' · '), detail:(r.reply || '') };
+    mdlTestResults[key] = { ok:true, text: bits.join(' · '), detail:(r.reply || '') };
   }else{
-    mdlTestResults[id] = { ok:false, text:'不可用：' + errText(r && (r.message || r.code) || '未知原因'),
+    mdlTestResults[key] = { ok:false, text:'不可用：' + errText(r && (r.message || r.code) || '未知原因'),
                            detail:(r && r.reply) || '' };
   }
-  paintTestResult(id);
+  paintTestResult(key);
 }
 
 // 只重绘那一张卡的结果行：整页重绘会让用户正在看的列表跳动。
-function paintTestResult(id){
-  const card = document.querySelector('[data-mdl-card="' + CSS.escape(id) + '"]');
+function paintTestResult(key){
+  // key 是 "id#index"，定位卡片用 data-mdl-card + data-mdl-idx 两个属性，
+  // 这样同 id 的两条永远各归各的。
+  const hash = String(key).lastIndexOf('#');
+  const id = hash >= 0 ? String(key).slice(0, hash) : String(key);
+  const idx = hash >= 0 ? String(key).slice(hash + 1) : '';
+  let sel = '[data-mdl-card="' + CSS.escape(id) + '"]';
+  if(idx !== '') sel += '[data-mdl-idx="' + CSS.escape(idx) + '"]';
+  const card = document.querySelector(sel);
   if(!card) return;
   // 结果挂在「接口」那一行的行尾（.ln 是 flex 行，右端留白正好放它）。
   const host = card.querySelector('.mdl-meta .ln');
   if(!host) return;
   const old = host.querySelector('[data-tres]');
   if(old) old.remove();
-  const t = mdlTestResults[id];
+  const t = mdlTestResults[key];
   if(!t) return;
   // span：父元素是 flex 行，插 div 会把这一行撑成两行
   const el = document.createElement('span');
@@ -2536,7 +2639,7 @@ function paintTestResult(id){
     el.textContent = t.text;
     if(t.detail) el.title = t.detail;
   }
-  el.dataset.tres = id;
+  el.dataset.tres = key;
   host.appendChild(el);
 }
 
@@ -2594,8 +2697,10 @@ function confirmShowOne(id, n){
         <button class="btn primary" id="soYes">只显示这一条</button>
       </div></div>`;
     document.body.appendChild(layer);
-    layer.querySelector('#soNo').onclick  = ()=>{ layer.remove(); resolve(false); };
-    layer.querySelector('#soYes').onclick = ()=>{ layer.remove(); resolve(true); };
+    // 按 Esc 等同于「取消」：解析成 false，和点「取消」一样。
+    pushModalLayer(layer, ()=>{ layer.remove(); popModalLayer(layer); resolve(false); });
+    layer.querySelector('#soNo').onclick  = ()=>{ layer.remove(); popModalLayer(layer); resolve(false); };
+    layer.querySelector('#soYes').onclick = ()=>{ layer.remove(); popModalLayer(layer); resolve(true); };
   });
 }
 
@@ -2632,7 +2737,11 @@ function renderGroups(){
 
   host.querySelectorAll('[data-mgtab]').forEach(b=>{
     b.onclick = e=>{
-      if(e.target.closest('[data-mgedit]')) return;   // 铅笔单独处理
+      // 铅笔和改名输入框都在这个 button 里面，它们自己的点击不能当成「切标签页」：
+      // 改名框里点一下挪光标，若被当作切换，就会去改名盘上的文件、
+      // 把客户端正在读的 models.json 换掉，而这次改名随后又指向了已变的文件名。
+      if(e.target.closest('[data-mgedit]')) return;
+      if(e.target.closest('.mginput')) return;
       switchGroup(b.dataset.mgtab);
     };
     // 右键菜单：改名 / 测试 / 编辑 / 删除。
@@ -2739,6 +2848,10 @@ async function openGroupFile(g){
 }
 
 async function deleteGroup(g){
+  // closeModal() 会触发 onClose 回调，而这里 onClose 正好是「用户没选就关掉」的那条路。
+  // 所以确认时必须先把 promise 定下来再关窗，否则 closeModal 里的 resolve(false)
+  // 会先跑，后面的 resolve(true) 一点作用都没有 —— 分组就永远删不掉。
+  let decided = false;
   const ok = await new Promise(resolve=>{
     modal(`
       <div class="modal-h">
@@ -2755,8 +2868,8 @@ async function deleteGroup(g){
       <div class="modal-f">
         <button class="btn" data-close>取消</button>
         <button class="btn danger" id="doDelGroup">确认删除</button>
-      </div>`, { onClose: ()=> resolve(false) });
-    $('#doDelGroup').onclick = ()=>{ closeModal(); resolve(true); };
+      </div>`, { onClose: ()=>{ if(!decided){ decided = true; resolve(false); } } });
+    $('#doDelGroup').onclick = ()=>{ decided = true; resolve(true); closeModal(); };
   });
   if(!ok) return;
   busy(true, '正在删除分组…', g.file);
@@ -2803,11 +2916,19 @@ async function testGroupDialog(g){
 
   const draw = res => {
     const by = {};
-    asArr(res).forEach(r => { by[r.id] = r; });
+    // 只索引带 id 的对象。以前把 'busy' 这个字符串也传进来当元素，
+    // 它的 .id 是 undefined，于是被塞进 by[undefined] 永远取不到 ——
+    // 正在测的那些行因此从不显示「测试中…」（进度条的反馈就少了一半）。
+    // 现在统一传 { id, __busy:true }。
+    asArr(res).forEach(r => { if(r && r.id) by[r.id] = r; });
     $list.innerHTML = `<div class="bimodels">` + items.map(m=>{
       const r = by[m.id];
       let line = '';
-      if(r === 'busy') line = '<div class="bi-res busy">测试中…</div>';
+      if(r && r.__busy) line = '<div class="bi-res busy">测试中…</div>';
+      // ok 为 null = 这条还没轮到测。不画结果行。
+      // （以前只靠下面那句「清掉占位」兜底，分块测试里后面的块没被清到，
+      //   于是整屏未测的模型都挂着「不可用」，看着像大面积失败。）
+      else if(r && r.ok === null) line = '';
       else if(r) line = r.ok
         ? `<div class="bi-res ok">可用 · HTTP ${r.status}${r.elapsedMs ? ' · ' + r.elapsedMs + 'ms' : ''}</div>`
         : `<div class="bi-res bad">${esc(r.message || r.code || '不可用')}</div>`;
@@ -2822,8 +2943,6 @@ async function testGroupDialog(g){
     }).join('') + `</div>`;
   };
   draw(ids.map(id => ({ id, ok:null })));
-  // 清掉占位（还没测的行不显示任何结果文字）
-  $list.querySelectorAll('.bi-res').forEach(e=>e.remove());
 
   $run.onclick = async ()=>{
     if(!ids.length){ toast('这一组没有可测的模型', 'err'); return; }
@@ -2843,7 +2962,7 @@ async function testGroupDialog(g){
         draw(ids.map(id => {
           const f = acc.find(x => x.id === id);
           if(!f) return { id, ok:null };
-          return f.__busy ? 'busy' : f;
+          return f.__busy ? { id, __busy:true } : f;
         }));
         let r;
         try{
@@ -2877,7 +2996,7 @@ async function testGroupDialog(g){
 
     function syncDraw(){
       const map = {};
-      acc.forEach(x => { map[x.id] = x.__busy ? 'busy' : x; });
+      acc.forEach(x => { map[x.id] = x.__busy ? { id: x.id, __busy:true } : x; });
       draw(ids.map(id => map[id] || { id, ok:null }));
       $n.textContent = done + ' / ' + ids.length;
       $i.style.width = Math.round(done / ids.length * 100) + '%';
@@ -2959,22 +3078,51 @@ async function loadModels(opts){
   const ed = state.edition;
   const box = $('#mdlBox');
   if(box && !mdlState.loaded) box.innerHTML = '<div class="mdl-empty">读取中…</div>';
-  const r = await api('/api/models/list' + (ed ? '?edition=' + encodeURIComponent(ed) : ''));
+  // 记下这是第几次读，并在发出前把版本号也记住。快速切换版本时，先发的请求
+  // 可能后到，会把上一个版本的模型写进 mdlState —— 页面显示的模型和
+  // state.edition 就对不上了，接着的编辑/删除/隐藏/测试会带着「B 的版本号 + A 的
+  // id 和位置」发出去，改错 B 里的条目。回来的响应只要不是最新那一次、或者版本
+  // 已经变了，就丢掉不写。
+  const seq = ++mdlLoadSeq;
+  const ed0 = ed;
+  let r;
+  try {
+    r = await api('/api/models/list' + (ed ? '?edition=' + encodeURIComponent(ed) : ''));
+  } catch(e){
+    // 请求失败时必须把「读取中…」换成错误，否则页面永远停在加载态，
+    // 用户既看不到原因也没有重试入口（调用方都是 .catch(()=>{}) 吞掉的）。
+    if(seq === mdlLoadSeq && ed0 === state.edition && box && !mdlState.loaded){
+      box.innerHTML = '<div class="mdl-empty">读取模型清单失败：' + esc(errText(e.message)) + '<br>可以点右上角「重新读取」再试一次。</div>';
+    }
+    throw e;
+  }
+  if(seq !== mdlLoadSeq || ed !== state.edition) return;
   mdlState = {
     list: asArr(r.models), code: r.code || '', path: r.path || '',
     loadable: r.loadable !== false, exists: r.exists !== false, loaded: true,
     groups: mdlState.groups || []
   };
+  // 配置换了（重新读取、切版本、改完再读都会走到这里），上一份配置的测试结果必须
+  // 整个丢掉：键是「id#位置」，新配置里同 id 同位置的条目会命中旧结果，卡片上一直
+  // 挂着上一次的「可用 / 不可用」。这是唯一的清空落点——上面那个「不是最新就 return」
+  // 的守卫保证只有真正写进 mdlState 的那一次才会清，selectEdition 里的调用也经过
+  // 这里，所以不需要在别处再清一遍（重复清反而会丢掉刚跑完的在途结果）。
+  mdlTestResults = {};
   renderModels();
   // 分组标签页与模型清单分开取：分组的失败不该挡住模型列表。
+  // 同样加守卫：它和上面那个请求是并行发的，版本可能已经在路上换了。
   api('/api/models/groups' + (ed ? '?edition=' + encodeURIComponent(ed) : ''))
-    .then(g => { mdlState.groups = asArr(g.groups); renderGroups(); })
+    .then(g => {
+      if(seq !== mdlLoadSeq || ed !== state.edition) return;
+      mdlState.groups = asArr(g.groups); renderGroups();
+    })
     .catch(()=>{});
   // 文件里如果已经有「同 id 但都可见」的冲突，客户端只会让其中一条生效，
   // 其余是白占位置。顺手修掉：保留客户端会用的那条，把不生效的改成隐藏。
   if(opts && opts.repair && mdlState.loadable && mdlState.exists){
     try{
       const rr = await api('/api/models/repair', { edition: ed });
+      if(seq !== mdlLoadSeq || ed !== state.edition) return;
       if(rr && rr.changed && asArr(rr.hidden).length){
         // groups 必须带过去：上面那个分组请求是并行发的，可能已经先返回并写进了
         // 旧的 mdlState。这里重建对象时不带上它，标签栏虽然还在，但点铅笔改标题、
@@ -3322,6 +3470,11 @@ function openModelEditor(id, index){
   // 文件里存着 vendor = 用户手动选过；没有就是「跟着自动匹配走」。
   let iconManual = !!(m && m.vendor && String(m.vendor).trim() && String(m.vendor) !== 'Custom');
   let pickedIcon = iconManual ? vendorToIcon(String(m.vendor)) : autoIcon();
+  // 用户到底有没有动过图标？只改「备注」时不该动 vendor：
+  // 客户端认的 vendor 不止我们这张表里的那些，遇到表外的（比如 SiliconFlow），
+  // vendorToIcon 只能回落成 custom，一保存就把人家原来的值抹成 Custom 了 ——
+  // 而弹窗明确写着「只改你在下面动过的字段，其余原样保留」。
+  let iconTouched = false;
 
   function iconGlyph(v){
     const svg = MODEL_ICONS[v] || MODEL_ICONS.custom || '';
@@ -3348,6 +3501,7 @@ function openModelEditor(id, index){
           pickedIcon = b.dataset.icon;
           iconManual = true;
         }
+        iconTouched = true;
         renderIconRow();
         markTouched();
       };
@@ -3356,7 +3510,10 @@ function openModelEditor(id, index){
   renderIconRow();
   // 名称/id 变了要跟着刷新自动匹配（只在没手动选过时）
   [$name, $id].forEach(el => el.addEventListener('input', ()=>{
-    if(!iconManual){ pickedIcon = autoIcon(); renderIconRow(); }
+    // 只有在「自动模式」下改名字才算动过图标：那时图标是照着名字猜的，
+    // 名字一变图标就该跟着变。手动模式下图标是用户明确选的，改名不该
+    // 把它掀掉 —— 更不能把表外的 vendor（如 SiliconFlow）顺带冲成 Custom。
+    if(!iconManual){ iconTouched = true; pickedIcon = autoIcon(); renderIconRow(); }
   }));
 
   // ---------- 状态 ----------
@@ -3373,7 +3530,12 @@ function openModelEditor(id, index){
   // 图标始终写一个值：手动选过就用选的，没选过就用自动匹配的结果
   // （匹配不到时 autoIcon() 返回 'custom'，也就是「未知」）。
   // 图标 key → 写进文件的 vendor 值（客户端按 vendor 选图标）。
-  const vendorValue = () => ICON_VENDOR[iconManual ? pickedIcon : autoIcon()] || 'Custom';
+  const vendorValue = () => {
+    // 没动过图标、且这条本来就有一个我们认不出来的 vendor：原样保留。
+    // 表里的值照旧按「手动选的 / 自动匹配的」算。
+    if(!iconTouched && m && m.vendor && String(m.vendor).trim()) return String(m.vendor);
+    return ICON_VENDOR[iconManual ? pickedIcon : autoIcon()] || 'Custom';
+  };
   const snapshot = () => JSON.stringify({
     id: $id.value.trim(), url: $url.value.trim(), key: $key.value, name: $name.value,
     vendor: vendorValue(),
@@ -3505,9 +3667,11 @@ function openModelEditor(id, index){
   // ---------- 调用后端 ----------
   async function callTest(listOnly){
     const patch = buildPatch();
+    // allowFail：探测失败是「正常结果」，不是请求异常。抛出去的话调用方
+    // 拿不到 stage/code/message/tried，describe(r) 就没机会跑。
     return await api('/api/models/test', {
       edition: state.edition, originalId: id || '', model: patch, listOnly: !!listOnly
-    });
+    }, undefined, { allowFail:true });
   }
 
   // ---------- 选择模型：拉列表 → 浮层挑选 ----------
@@ -3558,7 +3722,8 @@ function openModelEditor(id, index){
       <div class="modal-f"><button class="btn" data-x>取消</button></div>
     </div>`;
     document.body.appendChild(layer);
-    const close = ()=> layer.remove();
+    const close = ()=>{ layer.remove(); popModalLayer(layer); };
+    pushModalLayer(layer, close);
     layer.querySelectorAll('[data-x]').forEach(b => b.onclick = close);
     layer.querySelectorAll('[data-pick]').forEach(b=>{
       b.onclick = ()=>{
@@ -3598,7 +3763,7 @@ function openModelEditor(id, index){
           id: $id.value.trim(), url: $url.value.trim(), apiKey: $key.value,
           useCustomProtocol: g('#mf_useCustomProtocol').checked
         }
-      });
+      }, undefined, { allowFail:true });
     }catch(e){ busy(false); $url.classList.add('bad'); showResp(false, '测试没能进行', esc(errText(e.message))); return; }
     busy(false);
 
@@ -3667,7 +3832,7 @@ function openModelEditor(id, index){
             id: $id.value.trim(), url: $url.value.trim(), apiKey: $key.value,
             useCustomProtocol: g('#mf_useCustomProtocol').checked
           }
-        });
+        }, undefined, { allowFail:true });
       }
       catch(e){
         busy(false);
@@ -3736,8 +3901,10 @@ function openModelEditor(id, index){
           <button class="btn primary" id="awYes">仍然保存</button>
         </div></div>`;
       document.body.appendChild(layer);
-      layer.querySelector('#awNo').onclick  = ()=>{ layer.remove(); resolve(false); };
-      layer.querySelector('#awYes').onclick = ()=>{ layer.remove(); resolve(true); };
+      // Esc = 返回修改（保守选择：不保存）
+      pushModalLayer(layer, ()=>{ layer.remove(); popModalLayer(layer); resolve(false); });
+      layer.querySelector('#awNo').onclick  = ()=>{ layer.remove(); popModalLayer(layer); resolve(false); };
+      layer.querySelector('#awYes').onclick = ()=>{ layer.remove(); popModalLayer(layer); resolve(true); };
     });
   }
 
@@ -3827,7 +3994,7 @@ function openBatchImport(){
     busy(true, '正在获取模型列表…', url);
     let r;
     try{
-      r = await api('/api/models/batch-list', { url, apiKey: key });
+      r = await api('/api/models/batch-list', { url, apiKey: key }, undefined, { allowFail:true });
     }catch(e){ busy(false); note(false, '获取失败', esc(errText(e.message))); return; }
     busy(false);
 
@@ -4375,7 +4542,7 @@ $('#btnQuit').onclick = async ()=>{
 $('#modalWrap').addEventListener('click', e=>{
   if(e.target.closest('[data-close]')) closeModal();
 });
-document.addEventListener('keydown', e=>{ if(e.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', e=>{ if(e.key === 'Escape') closeTopLayer(); });
 
 setInterval(()=>{ fetch('/api/ping?t=' + encodeURIComponent(TOKEN)).catch(()=>{}); }, 3000);
 

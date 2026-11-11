@@ -905,10 +905,12 @@ function Find-ModelEntryIndex($items, [string]$id, [int]$hint = -1) {
     return $hiddenIdx
 }
 
-function Get-ModelStoredApiKey([string]$product, [string]$id) {
+function Get-ModelStoredApiKey([string]$product, [string]$id, [int]$hint = -1) {
     # The plain-text key already in the file for this model. Duplicates resolve
     # the same way as everywhere else, so the key belongs to the same entry an
-    # edit would land on.
+    # edit would land on. $hint is the entry's position in the file array and
+    # wins when the entry there still carries the same id - that is what keeps a
+    # "test" click on the visible card from testing the hidden twin's key.
     #
     # Returns '' for an ENCRYPTED key, and the order below is load-bearing:
     # Test-WbEncrypted decides by looking for an "envelope" property, so it has
@@ -919,7 +921,7 @@ function Get-ModelStoredApiKey([string]$product, [string]$id) {
     if (-not $id) { return '' }
     $raw = Get-ModelsRaw $product
     if (-not $raw.valid) { return '' }
-    $idx = Find-ModelEntryIndex $raw.items $id
+    $idx = Find-ModelEntryIndex $raw.items $id $hint
     if ($idx -lt 0) { return '' }
     $rawKey = Get-ModelProp $raw.items[$idx] 'apiKey'
     if ($null -eq $rawKey) { return '' }
@@ -1422,7 +1424,7 @@ function Test-ReservedModelId([string]$id) {
     return ([string]$id -eq $script:GroupMarkerId)
 }
 
-function Save-ModelEntry([string]$product, [string]$originalId, $patch, [bool]$create, [int]$hint = -1) {
+function Save-ModelEntry([string]$product, [string]$originalId, $patch, [bool]$create, [int]$hint = -1, [bool]$NoSnapshot = $false) {
     if (-not (Test-Edition $product)) { throw 'unknown_edition' }
     if (-not $create -and (Test-ReservedModelId $originalId)) { throw 'model_not_found' }
     $raw = Get-ModelsRaw $product
@@ -1631,11 +1633,15 @@ function Save-ModelEntry([string]$product, [string]$originalId, $patch, [bool]$c
 
     $text = ConvertTo-ModelsDocument $list $raw.shape $raw.wrapper
     if (-not (ConvertFrom-ModelsText $text).ok) { throw 'models_serialize_failed' }
-    Save-ModelsSnapshot $product $raw.text
+    # $NoSnapshot is for the batch importer: it saves one entry at a time, and
+    # Save-ModelsSnapshot keeps only the newest 20 files. A batch of more than
+    # 20 would therefore push out the very snapshot of the pre-import file that
+    # is supposed to be the way back. The batch takes ONE snapshot before its
+    # loop instead, and turns this off for every item.
+    if (-not $NoSnapshot) { Save-ModelsSnapshot $product $raw.text }
     Write-ModelsText $raw.path $text
     Write-Log ("models saved: {0} id={1} stored={2} create={3} hidSiblings={4}" -f `
                $product, $newId, $storedId, $create, $hiddenSiblings.Count)
-
     $after = Get-ModelsList $product
     return [pscustomobject]@{
         ok             = $true
@@ -1841,6 +1847,11 @@ function Get-ModelCsvHeaderMap($header) {
     $cHidS   = [string]([char]0x9690 + [char]0x85CF + [char]0x6A21 + [char]0x578B)
     # "tubiao" - the icon column added in v1.6.7
     $cIcon   = [string]([char]0x56FE + [char]0x6807)
+    # "shuchu changdu" - the output-length column. The context column only ever
+    # fed maxInputTokens, so a listing that reported no output cap left it unset
+    # with no way to fill it in. Built from code points to keep this file ASCII.
+    $cOut    = [string]([char]0x8F93 + [char]0x51FA + [char]0x957F + [char]0x5EA6)
+    $cOutS   = [string]([char]0x8F93 + [char]0x51FA)
 
     $map = @{}
     for ($i = 0; $i -lt $header.Count; $i++) {
@@ -1854,6 +1865,7 @@ function Get-ModelCsvHeaderMap($header) {
         elseif ($h -eq $cEff -or $h -eq $cEffS -or $h -eq 'supportedefforts' -or $h -eq 'effort' -or $h -eq 'efforts') { $key = 'Effort' }
         elseif ($h -eq $cDef -or $h -eq 'defaulteffort') { $key = 'Default' }
         elseif ($h -eq $cCtx -or $h -eq $cCtxS -or $h -eq 'context' -or $h -eq 'contextlength' -or $h -eq 'maxinputtokens') { $key = 'Ctx' }
+        elseif ($h -eq $cOut -or $h -eq $cOutS -or $h -eq 'maxoutputtokens' -or $h -eq 'outputlength' -or $h -eq 'output') { $key = 'Out' }
         elseif ($h -eq $cHid -or $h -eq $cHidS -or $h -eq 'hidden') { $key = 'Hidden' }
         elseif ($h -eq $cIcon -or $h -eq 'icon' -or $h -eq 'vendor') { $key = 'Icon' }
         if ($key) { $map[$i] = $key }
@@ -2028,7 +2040,12 @@ function ConvertTo-CsvTokens([string]$v) {
     if ($s.EndsWith('k')) { $mult = 1000; $s = $s.Substring(0, $s.Length - 1).Trim() }
     elseif ($s.EndsWith('m')) { $mult = 1000000; $s = $s.Substring(0, $s.Length - 1).Trim() }
     $n = 0.0
-    if (-not [double]::TryParse($s, [ref]$n)) { return 0 }
+    # Parse with the invariant culture on purpose. [double]::TryParse without it
+    # follows the machine's locale, and on a comma-decimal locale "128.5k" would
+    # read as 1285 and be written out as 1285000. Everything else in this file
+    # that converts a number from text does the same for the same reason.
+    if (-not [double]::TryParse($s, [Globalization.NumberStyles]::Float,
+                                [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { return 0 }
     if ($n -le 0) { return 0 }
     return [long][Math]::Round($n * $mult)
 }
@@ -2286,12 +2303,28 @@ function Switch-ModelGroup([string]$product, [string]$file) {
     $inTitle = Get-GroupTitleFromFile $targetPath $file
 
     $parked = ''
+    $parkedPath = ''
     if (Test-Path -LiteralPath $activePath) {
         $dest = Get-UniqueGroupPath $dir $safeOut
         [IO.File]::Move($activePath, $dest)
+        $parkedPath = $dest
         $parked = [IO.Path]::GetFileName($dest)
     }
-    [IO.File]::Move($targetPath, $activePath)
+    try {
+        [IO.File]::Move($targetPath, $activePath)
+    } catch {
+        # Two renames make the switch, and the second one can fail on its own
+        # (antivirus holding the fresh file, a sharing violation, the file
+        # disappearing between the checks above and here). If it does and we
+        # leave it there, models.json simply does not exist any more and the
+        # client shows no custom models at all - with the user's real list
+        # sitting under a parked name they did not choose. Put the parked file
+        # back so the previous state survives, then report the failure.
+        if ($parkedPath -and (Test-Path -LiteralPath $parkedPath) -and -not (Test-Path -LiteralPath $activePath)) {
+            try { [IO.File]::Move($parkedPath, $activePath) } catch { }
+        }
+        throw
+    }
     Set-GroupMarkerInFile $product $activePath $inTitle
     Write-Log ("models group switch: {0} -> [{1}] title={2} parked={3}" -f `
                $product, $file, $inTitle, $parked)
@@ -2865,7 +2898,7 @@ function Get-ModelChatUrlCandidates([string]$url, [bool]$useCustomProtocol) {
     return ,$out.ToArray()
 }
 
-function Test-ModelChat([string]$product, $patch, [string]$originalId) {
+function Test-ModelChat([string]$product, $patch, [string]$originalId, [int]$hint = -1) {
     # The editor's "test chat" button. Unlike Test-ModelUsable this does NOT
     # walk the model listing first: the user's rule is "test the return code,
     # then test the conversation". So it posts one minimal chat request per
@@ -2875,6 +2908,11 @@ function Test-ModelChat([string]$product, $patch, [string]$originalId) {
     #
     # When the address that works is not the one typed in, it is reported back
     # as fixedUrl so the form can replace the field with the working value.
+    #
+    # $hint is the entry's position in the file array. Two entries can share one
+    # id (a visible one and a hidden twin); the listing's "test" button passes the
+    # position so the key looked up is the one on the card that was clicked,
+    # matching what edit / delete / hide already do.
     $url = ([string]$patch.url).Trim()
     $apiKey = [string]$patch.apiKey
     $id = ([string]$patch.id).Trim()
@@ -2892,11 +2930,11 @@ function Test-ModelChat([string]$product, $patch, [string]$originalId) {
     if (-not $apiKey -and $originalId) {
         # Prefer the same entry an edit would land on (visible twin first), so a
         # duplicate pair does not test against the hidden copy's key.
-        $apiKey = Get-ModelStoredApiKey $product $originalId
+        $apiKey = Get-ModelStoredApiKey $product $originalId $hint
         if (-not $apiKey) {
             $rawStored = Get-ModelsRaw $product
             if ($rawStored.valid) {
-                $si = Find-ModelEntryIndex $rawStored.items $originalId
+                $si = Find-ModelEntryIndex $rawStored.items $originalId $hint
                 if ($si -ge 0) {
                     $sk = Get-ModelProp $rawStored.items[$si] 'apiKey'
                     if ($null -ne $sk -and (Test-WbEncrypted $sk)) { $keyIsEncrypted = $true }
@@ -3045,12 +3083,27 @@ function Test-ModelBatch([string]$url, [string]$apiKey, $ids, [bool]$useCustomPr
 
     # The chat address falls back the same way the listing does: try the derived
     # /chat/completions first, and if every model 404s there, try /v1/chat/completions.
+    #
+    # Several candidates collapse onto the same chat address - "https://x" alone
+    # yields /chat/completions twice, and a pasted full chat address yields it up
+    # to three times. Left in, a dead chunk would probe the very same address
+    # again (wasting a whole round of timeouts), and the LAST candidate won, so
+    # the error shown came from a different address than the one that failed
+    # first. Deduplicate, and keep the first candidate's results when nothing
+    # answered anywhere.
     $cands = New-Object System.Collections.Generic.List[string]
+    $seenCands = @{}
     foreach ($c in @(Get-ModelProbeUrlCandidates $url)) {
         $cText = ([string]$c).TrimEnd('/')
-        if ($cText -match '/models$') { $cText = $cText.Substring(0, $cText.Length - 7) }
-        if ($cText -match '/chat/completions$') { $cands.Add($cText) }
-        else { $cands.Add($cText + '/chat/completions') }
+        # strip trailing /models so "https://x/v1/models" becomes "https://x/v1"
+        # instead of the nonsensical "https://x/v1/models/chat/completions".
+        # Repeat it: the candidate list appends /models to the pasted text too,
+        # so an input that already ends in /models arrives as "x/models/models"
+        # and would otherwise leave one /models behind.
+        while ($cText -match '/models$') { $cText = $cText.Substring(0, $cText.Length - 7).TrimEnd('/') }
+        if (-not $cText) { continue }
+        if ($cText -notmatch '/chat/completions$') { $cText = $cText + '/chat/completions' }
+        if (-not $seenCands.ContainsKey($cText)) { $seenCands[$cText] = $true; $cands.Add($cText) }
     }
     if ($cands.Count -eq 0) { $out.ok = $false; $out.error = 'url_invalid'; return $out }
 
@@ -3182,6 +3235,7 @@ function Test-ModelBatch([string]$url, [string]$apiKey, $ids, [bool]$useCustomPr
     $pool = $null
     $results = New-Object System.Collections.Generic.List[object]
     $usedChat = ''
+    $firstResults = $null
     foreach ($chatUrl in $cands) {
         $pool = [runspacefactory]::CreateRunspacePool(1, $concurrency)
         $pool.Open()
@@ -3204,6 +3258,12 @@ function Test-ModelBatch([string]$url, [string]$apiKey, $ids, [bool]$useCustomPr
         }
         $pool.Close(); $pool.Dispose(); $pool = $null
         $usedChat = $chatUrl
+        # Nothing answered anywhere means we fall through to the next candidate.
+        # Remember the FIRST candidate's results: if no candidate ever answers,
+        # those are the ones worth showing - the first address is the one derived
+        # straight from what the user typed. Reporting the last candidate instead
+        # showed the error from an address the user never chose.
+        if ($null -eq $firstResults) { $firstResults = $results }
         # If anything answered, this address is the right one. Only when every
         # single model failed do we try the next candidate address.
         $anyOk = $false
@@ -3211,6 +3271,14 @@ function Test-ModelBatch([string]$url, [string]$apiKey, $ids, [bool]$useCustomPr
         if ($anyOk) { break }
     }
     if ($null -ne $pool) { try { $pool.Close(); $pool.Dispose() } catch { } }
+    if ($null -ne $firstResults) {
+        $anyOk = $false
+        foreach ($r in $results) { if ($r.ok) { $anyOk = $true; break } }
+        if (-not $anyOk) {
+            $results = $firstResults
+            $usedChat = [string]@($cands)[0]
+        }
+    }
 
     $out.chatUrl = $usedChat
     $out.triedChat = $cands.ToArray()
@@ -3618,11 +3686,32 @@ function Get-SyncPlan([string]$name, [string]$product) {
     # --- the local side ---
     $local = @{}
     foreach ($s in (Get-SessionsIndex $product -IncludeDeleted)) { $local[[string]$s.id] = $s }
+    $localProj = Join-Path (Get-EditionHome $product) 'projects'
+
+    # Does this backup carry attachments? Get-SessionsIndex ALWAYS counts the
+    # local attachment folder (its `bytes` is consumed by ~8 read-only callers,
+    # so it cannot be changed there). The two sides are therefore aligned HERE,
+    # per backup: when the backup carries attachments both sides count the
+    # attachment folder; when it does not (includeAttachments=false) the local
+    # attachment folder is subtracted below so the two numbers are comparable.
+    # Otherwise a backup made without attachments would look smaller than the
+    # local copy for every conversation that has attachments, a genuinely newer
+    # backup would be reported as "ask" (a conflict) instead of "push", and the
+    # sync would never update anything while the dialog filled with false
+    # conflicts.
+    $backupHasAtt = $true
+    try {
+        $mf = Read-JsonFile (Join-Path $dir 'manifest.json')
+        if ($null -ne $mf -and $null -ne $mf.PSObject.Properties['includeAttachments']) {
+            $backupHasAtt = [bool]$mf.includeAttachments
+        }
+    } catch { }
 
     # Transcript sizes inside the backup. A session's "size" has to mean the same
-    # thing on both sides or the comparison is meaningless: Get-SessionsIndex
-    # counts the .jsonl plus its rollback file plus any attachment folder, so the
-    # backup side counts exactly the same three things.
+    # thing on both sides or the comparison is meaningless. When the backup has
+    # attachments, both sides count the .jsonl, its rollback file and the
+    # attachment folder; when it does not, the attachment folder is left out of
+    # the local number too so the two are comparable.
     $srcProj = Join-Path $dir 'projects'
     foreach ($row in $srcRows) {
         $sid = [string]$row.id
@@ -3638,7 +3727,7 @@ function Get-SyncPlan([string]$name, [string]$product) {
                     $rb = Join-Path $slugDir.FullName ($sid + '.file-rollback.ndjson')
                     if (Test-Path -LiteralPath $rb) { $srcBytes += (Get-Item -LiteralPath $rb).Length }
                     $att = Join-Path $slugDir.FullName $sid
-                    if (Test-Path -LiteralPath $att) { $srcBytes += (Get-FolderSize $att) }
+                    if ($backupHasAtt -and (Test-Path -LiteralPath $att)) { $srcBytes += (Get-FolderSize $att) }
                     break
                 }
             }
@@ -3663,10 +3752,18 @@ function Get-SyncPlan([string]$name, [string]$product) {
             continue
         }
         $l = $local[$sid]
-        $entry.dstBytes = [long]$l.bytes
+        # Match the backup's accounting (see $backupHasAtt above): Get-SessionsIndex
+        # unconditionally folds the attachment folder into `bytes`, so subtract it
+        # back out when this backup does not carry attachments.
+        $localBytes = [long]$l.bytes
+        if (-not $backupHasAtt -and $l.hasAttachments) {
+            $attDir = Join-Path (Join-Path $localProj ([string]$l.slug)) $sid
+            if (Test-Path -LiteralPath $attDir) { $localBytes = $localBytes - (Get-FolderSize $attDir) }
+        }
+        $entry.dstBytes = $localBytes
         $entry.dstMs = [long]$l.updatedMs
         $entry.dstAt = [string]$l.updatedAt
-        $entry.verdict = Compare-SyncCandidate $srcBytes $srcMs ([long]$l.bytes) ([long]$l.updatedMs)
+        $entry.verdict = Compare-SyncCandidate $srcBytes $srcMs $localBytes ([long]$l.updatedMs)
         switch ($entry.verdict) {
             'push' { $out.push = @($out.push) + $entry }
             'keep' { $out.keep = @($out.keep) + $entry }
@@ -4661,12 +4758,40 @@ function Switch-Account([string]$product, [string]$uid, [bool]$Restart = $true, 
     $prevUid = ''
     if ($prev) { $prevUid = [string]$prev.uid }
 
-    # never lose the token of the account we are leaving
-    try { [void](Save-Profile $product) } catch { Write-Log 'skip saving current login (none)' }
-
     $wasRunning = ((Get-ClientProcesses (Get-ProductProc $product)).Count -gt 0)
     # only touch the client of the product line we are switching
     [void](Stop-Client (Get-ProductProc $product))
+
+    # Save the login state AFTER the client has stopped, not before.
+    #
+    # The client rotates the refresh token on every renewal and invalidates the
+    # previous one. Copying .info while the client is still up (which is what
+    # this used to do) can therefore snapshot a token that the client revokes
+    # during the 1.2 s before the force kill, or while it writes its state on
+    # shutdown - and the snapshot then buys the user a "please log in again" for
+    # the very account this step exists to keep. Stopped first, the file on disk
+    # is the settled one.
+    #
+    # Still a hard prerequisite: the whole point of switching is that the old
+    # account must not be lost, so a failure here aborts the switch instead of
+    # dropping a login we could not back up.
+    #
+    # Only "there is no login to save" may be swallowed. Anything else (an
+    # antivirus lock, a full disk) means the snapshot was NOT taken, and
+    # carrying on would overwrite the live .info a few lines below with the
+    # target profile - leaving the old account's rotated refresh token only in
+    # .bak-before-switch, which the next switch overwrites. That is exactly the
+    # "please log in again" this step exists to prevent, so re-throw instead.
+    try {
+        [void](Save-Profile $product)
+    } catch {
+        $why = $_.Exception.Message
+        if ($why -notmatch 'no_login_state') {
+            Write-Log ('save before switch failed: ' + $why)
+            throw 'save_before_switch_failed'
+        }
+        Write-Log 'skip saving current login (none)'
+    }
 
     $dst = Get-InfoPath $product
     $dir = Split-Path -Parent $dst
@@ -4746,6 +4871,14 @@ function Clear-Login([string]$product, [bool]$Restart = $true) {
     $dst = Get-InfoPath $product
     if (-not (Test-Path -LiteralPath $dst)) { throw 'not_logged_in' }
 
+    $wasRunning = ((Get-ClientProcesses (Get-ProductProc $product)).Count -gt 0)
+    [void](Stop-Client (Get-ProductProc $product))
+
+    # Stop the client first, then save. Compared with saving while it is still
+    # running, this avoids snapshotting a refresh token the client is about to
+    # rotate away (it invalidates the previous token on every renewal, and it
+    # also writes its state during shutdown). Same reasoning as Switch-Account.
+    #
     # The whole point of "log in a new account" is that the old one must not be
     # lost, so saving the current login state is a hard prerequisite: if it fails
     # we stop here instead of clearing a login we could not back up.
@@ -4754,9 +4887,6 @@ function Clear-Login([string]$product, [bool]$Restart = $true) {
         Write-Log ('save before logout failed: ' + $_.Exception.Message)
         throw 'save_before_logout_failed'
     }
-
-    $wasRunning = ((Get-ClientProcesses (Get-ProductProc $product)).Count -gt 0)
-    [void](Stop-Client (Get-ProductProc $product))
 
     # the copy in profiles\<product>\<uid>.info is the backup, so the live file is
     # simply removed - no second copy left behind. Do not trust the cmdlet result:
@@ -6399,6 +6529,14 @@ function Invoke-Api([string]$path, $query, $req) {
             $added = New-Object System.Collections.Generic.List[string]
             $skipped = New-Object System.Collections.Generic.List[object]
             $hidSiblings = New-Object System.Collections.Generic.List[string]
+            # One snapshot for the whole batch, taken before anything is written.
+            # Letting Save-ModelEntry snapshot per item is what destroyed the way
+            # back: it keeps only the newest 20 files, so importing more than 20
+            # models pushed the pre-import snapshot out and left nothing but
+            # intermediate states of this same batch. Taken here, the "before"
+            # state is the oldest of the batch and survives.
+            $preImportRaw = Get-ModelsRaw $edition
+            if ($preImportRaw.valid) { Save-ModelsSnapshot $edition $preImportRaw.text }
             foreach ($it in (To-ItemArray $items)) {
                 if ($null -eq $it) { continue }
                 $mid = ([string](Get-ModelProp $it 'id')).Trim()
@@ -6472,7 +6610,11 @@ function Invoke-Api([string]$path, $query, $req) {
                 $patch | Add-Member -NotePropertyName supportedEfforts -NotePropertyValue @($efforts) -Force
                 $patch | Add-Member -NotePropertyName defaultEffort -NotePropertyValue $defEff -Force
 
-                # ---- context length: listing > csv, and 0 means "do not write" ----
+                # ---- token limits: listing > csv, and 0 means "do not write" ----
+                # Both halves fall back to csv now. The output cap used to be
+                # listing-only, so a gateway that reported no output limit left
+                # the field unset with no way to supply it - the context column
+                # carried the input length and nothing carried the output one.
                 $inTok = 0
                 $iv = Get-ModelProp $it 'maxInputTokens'
                 if ($null -ne $iv) { try { $inTok = [long]$iv } catch { $inTok = 0 } }
@@ -6482,6 +6624,9 @@ function Invoke-Api([string]$path, $query, $req) {
                 $outTok = 0
                 $ov = Get-ModelProp $it 'maxOutputTokens'
                 if ($null -ne $ov) { try { $outTok = [long]$ov } catch { $outTok = 0 } }
+                if ($outTok -le 0 -and $row -and $row.ContainsKey('Out')) {
+                    $outTok = ConvertTo-CsvTokens $row['Out']
+                }
                 if ($inTok -gt 0) { $patch | Add-Member -NotePropertyName maxInputTokens -NotePropertyValue $inTok -Force }
                 if ($outTok -gt 0) { $patch | Add-Member -NotePropertyName maxOutputTokens -NotePropertyValue $outTok -Force }
 
@@ -6520,7 +6665,7 @@ function Invoke-Api([string]$path, $query, $req) {
                     # create=$true always: importing an id that already exists adds
                     # a new entry and hides the old one (see Save-ModelEntry), it
                     # does not overwrite and does not get skipped.
-                    $rr = Save-ModelEntry $edition $mid $patch $true
+                    $rr = Save-ModelEntry $edition $mid $patch $true -1 $true
                     $added.Add($mid)
                     foreach ($h in (To-ItemArray $rr.hiddenSiblings)) { $hidSiblings.Add([string]$h) }
                 } catch {
@@ -6587,14 +6732,18 @@ function Invoke-Api([string]$path, $query, $req) {
             $edition = ''
             $originalId = ''
             $patch = $null
+            $idxHint = -1
             if ($body) {
                 $edition = [string]$body.edition
                 $originalId = [string]$body.originalId
                 $patch = $body.model
+                if ($null -ne $body.PSObject.Properties['index'] -and $null -ne $body.index) {
+                    try { $idxHint = [int]$body.index } catch { $idxHint = -1 }
+                }
             }
             if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
             if ($null -eq $patch) { throw 'params_required' }
-            $r = Test-ModelChat $edition $patch $originalId
+            $r = Test-ModelChat $edition $patch $originalId $idxHint
             Write-Log ("models test-chat: {0} id={1} ok={2} code={3} status={4} url={5} fixed={6}" -f `
                        $edition, ([string]$patch.id), $r.ok, $r.code, $r.status, $r.chatUrl, $r.fixedUrl)
             return $r

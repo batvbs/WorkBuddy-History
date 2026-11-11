@@ -1,0 +1,2724 @@
+{
+ "_source": "https://download.codebuddy.ai/connectors-config-v2/custom-model/customModelSettings.json",
+ "_note": "客户端「添加自定义模型」真正使用的配置（拉取失败才回落 contexts.js 里的本地兜底表）。providers 里的 disabledInRegions 决定该服务商在 domestic/overseas 下是否可见。",
+ "edition": "国际版(WorkBuddy)",
+ "providerGroups": 4,
+ "providers": 18,
+ "modelOptions": 162,
+ "data": {
+  "providerGroups": [
+   {
+    "id": "tokenPlan",
+    "label": {
+     "zh": "Token Plan",
+     "en": "Token Plan"
+    },
+    "order": 0
+   },
+   {
+    "id": "recommended",
+    "label": {
+     "zh": "Coding Plan",
+     "en": "Coding Plan"
+    },
+    "order": 1
+   },
+   {
+    "id": "standard",
+    "label": {
+     "zh": "自定义 API",
+     "en": "Custom API"
+    },
+    "order": 2
+   },
+   {
+    "id": "custom",
+    "label": {
+     "zh": "其他",
+     "en": "Other"
+    },
+    "order": 3
+   }
+  ],
+  "providers": [
+   {
+    "id": "tencent-token-plan-pro-sg",
+    "displayName": {
+     "zh": "腾讯云 Token Plan (新加坡) / 企业版专业套餐",
+     "en": "Tencent Cloud Token Plan (Singapore) / Enterprise Pro Plan"
+    },
+    "groupId": "tokenPlan",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://tokenhub-intl.tencentcloudmaas.com/plan/v3/chat/completions",
+    "providerLinkUrl": "https://www.tencentcloud.com/document/product/1300/81489",
+    "providerLinkKind": "docs",
+    "order": 0,
+    "vendor": "Tencent Cloud Token Plan",
+    "icon": "tencent-cloud",
+    "namePrefix": {
+     "zh": "TokenPlan企业专业",
+     "en": "TokenPlan Enterprise Pro"
+    },
+    "endpointAliases": [
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/v3",
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/anthropic",
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/anthropic/v1/messages"
+    ]
+   },
+   {
+    "id": "tencent-token-plan-lite-sg",
+    "displayName": {
+     "zh": "腾讯云 Token Plan (新加坡) / 企业版轻享套餐",
+     "en": "Tencent Cloud Token Plan(Singapore) / Enterprise Lite Plan"
+    },
+    "groupId": "tokenPlan",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://tokenhub-intl.tencentcloudmaas.com/plan/v3/chat/completions",
+    "providerLinkUrl": "https://www.tencentcloud.com/document/product/1300/81490",
+    "providerLinkKind": "docs",
+    "order": 1,
+    "vendor": "Tencent Cloud Token Plan",
+    "icon": "tencent-cloud",
+    "namePrefix": {
+     "en": "TokenPlan Enterprise Lite",
+     "zh": "TokenPlan企业轻享"
+    },
+    "endpointAliases": [
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/v3",
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/anthropic",
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/anthropic/v1/messages"
+    ]
+   },
+   {
+    "id": "tencent-token-plan-pro",
+    "displayName": {
+     "zh": "腾讯云 Token Plan (广州) / 企业版专业套餐",
+     "en": "Tencent Cloud Token Plan (GuangZhou) / Enterprise Pro Plan"
+    },
+    "groupId": "tokenPlan",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://tokenhub.tencentcloudmaas.com/plan/v3/chat/completions",
+    "endpointAliases": [
+     "https://tokenhub.tencentcloudmaas.com/plan/v3",
+     "https://tokenhub.tencentcloudmaas.com/plan/anthropic",
+     "https://tokenhub.tencentcloudmaas.com/plan/anthropic/v1/messages"
+    ],
+    "providerLinkUrl": "https://www.tencentcloud.com/document/product/1300/81489",
+    "providerLinkKind": "docs",
+    "order": 2,
+    "vendor": "Tencent Cloud Token Plan",
+    "icon": "tencent-cloud",
+    "namePrefix": {
+     "zh": "TokenPlan企业专业",
+     "en": "TokenPlan Enterprise Pro"
+    }
+   },
+   {
+    "id": "tencent-token-plan-lite",
+    "displayName": {
+     "zh": "腾讯云 Token Plan (广州) / 企业版轻享套餐",
+     "en": "Tencent Cloud Token Plan (GuangZhou) / Enterprise Lite Plan"
+    },
+    "groupId": "tokenPlan",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://tokenhub.tencentcloudmaas.com/plan/v3/chat/completions",
+    "endpointAliases": [
+     "https://tokenhub.tencentcloudmaas.com/plan/v3",
+     "https://tokenhub.tencentcloudmaas.com/plan/anthropic",
+     "https://tokenhub.tencentcloudmaas.com/plan/anthropic/v1/messages"
+    ],
+    "providerLinkUrl": "https://www.tencentcloud.com/document/product/1300/81490",
+    "providerLinkKind": "docs",
+    "order": 3,
+    "vendor": "Tencent Cloud Token Plan",
+    "icon": "tencent-cloud",
+    "namePrefix": {
+     "zh": "TokenPlan企业轻享",
+     "en": "TokenPlan Enterprise Lite"
+    }
+   },
+   {
+    "id": "tencent-token-plan",
+    "displayName": {
+     "zh": "腾讯云 Token Plan / 通用 Token Plan（个人版）",
+     "en": "Tencent Cloud Token Plan / Personal Edition"
+    },
+    "groupId": "tokenPlan",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://tokenhub-intl.tencentcloudmaas.com/plan/v3/chat/completions",
+    "endpointAliases": [
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/v3",
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/anthropic",
+     "https://tokenhub-intl.tencentcloudmaas.com/plan/anthropic/v1/messages"
+    ],
+    "providerLinkUrl": "https://www.tencentcloud.com/document/product/1300/81315",
+    "providerLinkKind": "docs",
+    "order": 4,
+    "vendor": "Tencent Cloud Token Plan",
+    "icon": "tencent-cloud",
+    "namePrefix": {
+     "zh": "通用TokenPlan",
+     "en": "General TokenPlan"
+    }
+   },
+   {
+    "id": "tencent-coding",
+    "displayName": {
+     "zh": "腾讯云 Coding Plan",
+     "en": "Tencent Cloud Coding Plan"
+    },
+    "groupId": "recommended",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://api.lkeap.cloud.tencent.com/coding/v3/chat/completions",
+    "providerLinkUrl": "https://cloud.tencent.com/document/product/1772/128947",
+    "providerLinkKind": "docs",
+    "order": 5,
+    "vendor": "Tencent Cloud Coding Plan",
+    "icon": "tencent-cloud"
+   },
+   {
+    "id": "glm-coding",
+    "displayName": {
+     "zh": "智谱 Coding Plan",
+     "en": "GLM Coding Plan"
+    },
+    "groupId": "recommended",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://open.bigmodel.cn/api/coding/paas/v4",
+    "endpointAliases": [
+     "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+    ],
+    "providerLinkUrl": "https://docs.bigmodel.cn/cn/coding-plan/tool/others",
+    "providerLinkKind": "docs",
+    "order": 6,
+    "vendor": "GLM Coding Plan",
+    "icon": "glm"
+   },
+   {
+    "id": "kimi-coding",
+    "displayName": {
+     "zh": "Kimi Coding Plan",
+     "en": "Kimi Coding Plan"
+    },
+    "groupId": "recommended",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://api.kimi.com/coding/v1",
+    "endpointAliases": [
+     "https://api.kimi.com/coding/v1/chat/completions"
+    ],
+    "providerLinkUrl": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+    "providerLinkKind": "docs",
+    "order": 7,
+    "vendor": "Kimi Coding Plan",
+    "icon": "kimi"
+   },
+   {
+    "id": "tencent-tokenhub-sg",
+    "displayName": {
+     "zh": "腾讯云 TokenHub (新加坡)",
+     "en": "Tencent Cloud TokenHub (Singapore)"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://tokenhub-intl.tencentcloudmaas.com/v1/chat/completions",
+    "providerLinkUrl": "https://www.tencentcloud.com/document/product/1300/80632?lang=en&pg=",
+    "providerLinkKind": "docs",
+    "order": 8,
+    "vendor": "Tencent Cloud TokenHub",
+    "icon": "tencent-cloud",
+    "namePrefix": {
+     "zh": "TokenHub",
+     "en": "TokenHub"
+    },
+    "endpointAliases": [
+     "https://tokenhub-intl.tencentcloudmaas.com/v1",
+     "https://tokenhub-intl.tencentcloudmaas.com/v1/responses",
+     "https://tokenhub-intl.tencentcloudmaas.com/v1/messages"
+    ]
+   },
+   {
+    "id": "tencent-tokenhub",
+    "displayName": {
+     "zh": "腾讯云 TokenHub (广州)",
+     "en": "Tencent Cloud TokenHub (GuangZhou)"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://tokenhub.tencentcloudmaas.com/v1/chat/completions",
+    "providerLinkUrl": "https://www.tencentcloud.com/document/product/1300/80632?lang=en&pg=",
+    "providerLinkKind": "docs",
+    "order": 9,
+    "vendor": "Tencent Cloud TokenHub",
+    "icon": "tencent-cloud",
+    "namePrefix": {
+     "zh": "TokenHub",
+     "en": "TokenHub"
+    },
+    "endpointAliases": [
+     "https://tokenhub.tencentcloudmaas.com/v1",
+     "https://tokenhub.tencentcloudmaas.com/v1/responses",
+     "https://tokenhub.tencentcloudmaas.com/v1/messages"
+    ]
+   },
+   {
+    "id": "glm-open-platform",
+    "displayName": {
+     "zh": "智谱开放平台",
+     "en": "GLM Open Platform"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://open.bigmodel.cn/api/paas/v4",
+    "endpointAliases": [
+     "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    ],
+    "providerLinkUrl": "https://docs.bigmodel.cn/",
+    "providerLinkKind": "docs",
+    "order": 10,
+    "vendor": "GLM API",
+    "icon": "glm"
+   },
+   {
+    "id": "kimi-intl",
+    "displayName": {
+     "zh": "Kimi 国际版",
+     "en": "Kimi International"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://api.moonshot.ai/v1/chat/completions",
+    "providerLinkUrl": "https://platform.moonshot.ai/docs/guide/start-using-kimi-api",
+    "providerLinkKind": "docs",
+    "order": 11,
+    "vendor": "Kimi",
+    "icon": "kimi",
+    "disabledInRegions": [
+     "domestic"
+    ]
+   },
+   {
+    "id": "minimax-intl",
+    "displayName": {
+     "zh": "MiniMax 国际版",
+     "en": "MiniMax International"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://api.minimax.io/v1/chat/completions",
+    "providerLinkUrl": "https://platform.minimax.io/docs/guides/text-ai-coding-tools",
+    "providerLinkKind": "docs",
+    "order": 12,
+    "vendor": "MiniMax",
+    "icon": "minimax",
+    "disabledInRegions": [
+     "domestic"
+    ]
+   },
+   {
+    "id": "deepseek",
+    "displayName": {
+     "zh": "深度求索",
+     "en": "DeepSeek"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://api.deepseek.com/chat/completions",
+    "endpointAliases": [
+     "https://api.deepseek.com/v1/chat/completions",
+     "https://api.deepseek.com/anthropic/v1/messages"
+    ],
+    "providerLinkUrl": "https://api-docs.deepseek.com/",
+    "providerLinkKind": "docs",
+    "order": 13,
+    "vendor": "DeepSeek",
+    "icon": "deepseek"
+   },
+   {
+    "id": "gemini",
+    "displayName": {
+     "zh": "谷歌 Gemini",
+     "en": "Google Gemini"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "selectOrInput",
+    "advancedConfigMode": "hidden",
+    "savePolicy": "autoFromModel",
+    "showCapabilitiesInForm": false,
+    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "providerLinkUrl": "https://ai.google.dev/gemini-api/docs/openai",
+    "providerLinkKind": "docs",
+    "order": 14,
+    "vendor": "Google Gemini",
+    "icon": "gemini",
+    "disabledInRegions": [
+     "domestic"
+    ]
+   },
+   {
+    "id": "openrouter",
+    "displayName": {
+     "zh": "OpenRouter 聚合",
+     "en": "OpenRouter"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "input",
+    "advancedConfigMode": "optional",
+    "savePolicy": "manual",
+    "showCapabilitiesInForm": true,
+    "defaultSupportsToolCall": true,
+    "defaultSupportsImages": true,
+    "defaultSupportsReasoning": false,
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "providerLinkUrl": "https://openrouter.ai/docs/quickstart",
+    "providerLinkKind": "docs",
+    "order": 15,
+    "vendor": "OpenRouter",
+    "icon": "openrouter",
+    "disabledInRegions": [
+     "domestic"
+    ]
+   },
+   {
+    "id": "together-ai",
+    "displayName": {
+     "zh": "Together AI",
+     "en": "Together AI"
+    },
+    "groupId": "standard",
+    "providerType": "standard",
+    "authMode": "apiKey",
+    "endpointMode": "readonly",
+    "modelInputMode": "input",
+    "advancedConfigMode": "optional",
+    "savePolicy": "manual",
+    "showCapabilitiesInForm": true,
+    "defaultSupportsToolCall": true,
+    "defaultSupportsImages": false,
+    "defaultSupportsReasoning": false,
+    "endpoint": "https://api.together.xyz/v1/chat/completions",
+    "providerLinkUrl": "https://docs.together.ai/reference/chat-completions",
+    "providerLinkKind": "docs",
+    "order": 16,
+    "vendor": "Together AI",
+    "icon": "together-ai",
+    "disabledInRegions": [
+     "domestic"
+    ]
+   },
+   {
+    "id": "custom",
+    "displayName": {
+     "zh": "自定义",
+     "en": "Custom"
+    },
+    "groupId": "custom",
+    "providerType": "custom",
+    "authMode": "apiKey",
+    "endpointMode": "editable",
+    "modelInputMode": "input",
+    "advancedConfigMode": "optional",
+    "savePolicy": "manual",
+    "showCapabilitiesInForm": true,
+    "defaultSupportsToolCall": true,
+    "defaultSupportsImages": false,
+    "defaultSupportsReasoning": false,
+    "footerEntryAction": "openSettingsAndCreate",
+    "order": 17,
+    "vendor": "Custom",
+    "icon": "custom"
+   }
+  ],
+  "modelOptions": [
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "auto",
+    "displayName": "Auto",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "hy4-preview",
+    "displayName": "Hy4 preview",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 983040,
+    "maxOutputTokens": 65536,
+    "supportsReasoning": true,
+    "order": 2
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "kimi-k2.7-code",
+    "displayName": "Kimi K2.7 Code",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "canDisableThinking": false,
+    "order": 3
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "kimi-k2.7-code-highspeed",
+    "displayName": "Kimi K2.7 Code HighSpeed",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "canDisableThinking": false,
+    "order": 4
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "kimi-k3",
+    "displayName": "Kimi K3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "defaultEffort": "max",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "canDisableThinking": false
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 1000000,
+    "order": 5
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "minimax-m3",
+    "displayName": "MiniMax-M3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 524288,
+    "order": 6
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "glm-5.2",
+    "displayName": "GLM-5.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "reasoning": {
+     "supportedEfforts": [
+      "high",
+      "xhigh"
+     ],
+     "defaultEffort": "high"
+    },
+    "order": 7
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "glm-5.3",
+    "displayName": "GLM-5.3",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "canDisableThinking": false,
+     "defaultEffort": "max",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ]
+    },
+    "order": 8
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "glm-5.3-flash",
+    "displayName": "GLM-5.3-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "high",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 9
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek-v4-flash",
+    "displayName": "DeepSeek-V4-Flash",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 10
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek-v4-pro",
+    "displayName": "DeepSeek-V4-Pro",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 11
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek-v4-flash-0731",
+    "displayName": "DeepSeek-V4-Flash 0731 (Official version)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 12
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek-v4-pro-0813",
+    "displayName": "DeepSeek-V4-Pro 0813 (Official version)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 13
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek-v4-flash-202605",
+    "displayName": "DeepSeek-V4-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 14
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek-v4-pro-202606",
+    "displayName": "DeepSeek-V4-Pro (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 15
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek/deepseek-v4-flash-vision-exp",
+    "displayName": "DeepSeek-V4-Flash-Vision-Exp (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 16
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek-v4.1-flash",
+    "displayName": "DeepSeek-V4.1-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 17
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "deepseek/deepseek-flash",
+    "displayName": "DeepSeek-V4.1-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 18
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "mimo-v2.6-pro",
+    "displayName": "MiMo-V2.6-Pro",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 19
+   },
+   {
+    "providerId": "tencent-token-plan-pro-sg",
+    "model": "mimo-v2.6-flash",
+    "displayName": "MiMo-V2.6-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 20
+   },
+   {
+    "providerId": "tencent-token-plan-lite-sg",
+    "model": "auto",
+    "displayName": "Auto",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "auto",
+    "displayName": "Auto",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "kimi-k2.7-code",
+    "displayName": "Kimi K2.7 Code",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "canDisableThinking": false,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "order": 2
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "kimi-k2.7-code-highspeed",
+    "displayName": "Kimi K2.7 Code HighSpeed",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "canDisableThinking": false,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "order": 3
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "minimax-m3",
+    "displayName": "MiniMax-M3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 524288,
+    "order": 4
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "glm-5.2",
+    "displayName": "GLM-5.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "order": 5
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "glm-5.3",
+    "displayName": "GLM-5.3",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "max",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 6
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek-v4-flash",
+    "displayName": "DeepSeek-V4-Flash",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 7
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek-v4-pro",
+    "displayName": "DeepSeek-V4-Pro",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 8
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek-v4-flash-202605",
+    "displayName": "DeepSeek-V4-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 9
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek-v4-pro-202606",
+    "displayName": "DeepSeek-V4-Pro (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 10
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek-v4-flash-0731",
+    "displayName": "DeepSeek-V4-Flash 0731 (Official version)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 11
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek-v4-pro-0813",
+    "displayName": "DeepSeek-V4-Pro 0813 (Official version)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 12
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek/deepseek-v4-flash-vision-exp",
+    "displayName": "DeepSeek-V4-Flash-Vision-Exp (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 13
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "glm-5.3-flash",
+    "displayName": "GLM-5.3-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "high",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 14
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "kimi-k3",
+    "displayName": "Kimi K3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "defaultEffort": "max",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "canDisableThinking": false
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 1000000,
+    "order": 15
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "hy4-preview",
+    "displayName": "Hy4 preview",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 983040,
+    "maxOutputTokens": 65536,
+    "supportsReasoning": true,
+    "order": 16
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek-v4.1-flash",
+    "displayName": "DeepSeek-V4.1-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 17
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "deepseek/deepseek-flash",
+    "displayName": "DeepSeek-V4.1-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 18
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "mimo-v2.6-pro",
+    "displayName": "MiMo-V2.6-Pro",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 19
+   },
+   {
+    "providerId": "tencent-token-plan-pro",
+    "model": "mimo-v2.6-flash",
+    "displayName": "MiMo-V2.6-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 20
+   },
+   {
+    "providerId": "tencent-token-plan-lite",
+    "model": "auto",
+    "displayName": "Auto",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "auto",
+    "displayName": "Auto",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "kimi-k2.6",
+    "displayName": "Kimi-K2.6",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 2
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "kimi-k3",
+    "displayName": "Kimi K3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 1000000,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "defaultEffort": "max",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "canDisableThinking": false
+    },
+    "order": 3
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "minimax-m3",
+    "displayName": "MiniMax-M3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 524288,
+    "supportsReasoning": true,
+    "order": 4
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "glm-5.2",
+    "displayName": "GLM-5.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "reasoning": {
+     "supportedEfforts": [
+      "high",
+      "xhigh"
+     ],
+     "defaultEffort": "high"
+    },
+    "order": 5
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "glm-5.3-flash",
+    "displayName": "GLM-5.3-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "high",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 6
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "deepseek-v4-flash-202605",
+    "displayName": "DeepSeek-V4-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 7
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "deepseek-v4-pro-202606",
+    "displayName": "DeepSeek-V4-Pro (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 8
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "hy4-preview",
+    "displayName": "Hy4 preview",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 983040,
+    "maxOutputTokens": 65536,
+    "supportsReasoning": true,
+    "order": 9
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "deepseek/deepseek-flash",
+    "displayName": "DeepSeek-V4.1-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 10
+   },
+   {
+    "providerId": "tencent-token-plan",
+    "model": "mimo-v2.6-flash",
+    "displayName": "MiMo-V2.6-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 11
+   },
+   {
+    "providerId": "tencent-coding",
+    "model": "tc-code-latest",
+    "displayName": "Auto",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "tencent-coding",
+    "model": "hunyuan-2.0-instruct",
+    "displayName": "Tencent HY 2.0 Instruct",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 2
+   },
+   {
+    "providerId": "tencent-coding",
+    "model": "hunyuan-2.0-thinking",
+    "displayName": "Tencent HY 2.0 Think",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 3
+   },
+   {
+    "providerId": "tencent-coding",
+    "model": "minimax-m2.5",
+    "displayName": "MiniMax-M2.5",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 4
+   },
+   {
+    "providerId": "tencent-coding",
+    "model": "kimi-k2.5",
+    "displayName": "Kimi-K2.5",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 5
+   },
+   {
+    "providerId": "tencent-coding",
+    "model": "glm-5",
+    "displayName": "GLM-5",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 6
+   },
+   {
+    "providerId": "tencent-coding",
+    "model": "hunyuan-t1",
+    "displayName": "Hunyuan-T1",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 7
+   },
+   {
+    "providerId": "tencent-coding",
+    "model": "hunyuan-turbos",
+    "displayName": "Hunyuan-TurboS",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 8
+   },
+   {
+    "providerId": "glm-coding",
+    "model": "glm-5.3",
+    "displayName": "GLM-5.3",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 1,
+    "recommended": true,
+    "supportsReasoning": true,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "max",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072
+   },
+   {
+    "providerId": "glm-coding",
+    "model": "glm-5.2",
+    "displayName": "GLM-5.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "order": 2
+   },
+   {
+    "providerId": "glm-coding",
+    "model": "glm-5",
+    "displayName": "GLM-5",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 3
+   },
+   {
+    "providerId": "glm-coding",
+    "model": "glm-4.7",
+    "displayName": "GLM-4.7",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 4
+   },
+   {
+    "providerId": "glm-coding",
+    "model": "glm-4.6v",
+    "displayName": "GLM-4.6V",
+    "supportsTools": true,
+    "supportsImages": true,
+    "order": 5
+   },
+   {
+    "providerId": "kimi-coding",
+    "model": "kimi-k3",
+    "displayName": "Kimi K3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "defaultEffort": "max",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "canDisableThinking": false
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "kimi-coding",
+    "model": "kimi-k2.6",
+    "displayName": "Kimi K2.6",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 2
+   },
+   {
+    "providerId": "kimi-coding",
+    "model": "kimi-k2.5",
+    "displayName": "Kimi K2.5",
+    "supportsTools": true,
+    "supportsImages": true,
+    "order": 3
+   },
+   {
+    "providerId": "kimi-coding",
+    "model": "kimi-k2-0905-preview",
+    "displayName": "Kimi K2 (2024-09-05 Preview)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 4
+   },
+   {
+    "providerId": "kimi-coding",
+    "model": "kimi-k2-turbo-preview",
+    "displayName": "Kimi K2 Turbo Preview",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 5
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "hy4-preview",
+    "displayName": "Hy4 preview",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxOutputTokens": 65536,
+    "supportsReasoning": true,
+    "maxInputTokens": 983040,
+    "order": 1
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "hy3",
+    "displayName": "Hy3",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 192000,
+    "maxOutputTokens": 128000,
+    "order": 2,
+    "recommended": true
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek-v4-flash-202605",
+    "displayName": "DeepSeek-V4-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 3
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek-v4-pro-202606",
+    "displayName": "DeepSeek-V4-Pro (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 4
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek/deepseek-v4-flash-vision-exp",
+    "displayName": "DeepSeek-V4-Flash-Vision-Exp (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 5
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek-v4-flash-0731",
+    "displayName": "DeepSeek-V4-Flash 0731 (Official version)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 6
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek-v4-flash",
+    "displayName": "DeepSeek-V4-Flash",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 7
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek-v4-pro",
+    "displayName": "DeepSeek-V4-Pro",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 8
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek-v3.2",
+    "displayName": "DeepSeek-V3.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 98304,
+    "maxOutputTokens": 32768,
+    "supportsReasoning": true,
+    "order": 9
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "glm-5.3-flash",
+    "displayName": "GLM-5.3-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "high",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 10
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "glm-5.3",
+    "displayName": "GLM-5.3",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "max",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 11
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "glm-5.2",
+    "displayName": "GLM-5.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "order": 12
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "glm-5.1",
+    "displayName": "GLM-5.1",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 13
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "glm-5v-turbo",
+    "displayName": "GLM-5V-Turbo",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 14
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "glm-5-turbo",
+    "displayName": "GLM-5-Turbo",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 15
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "glm-5",
+    "displayName": "GLM-5",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 16
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "kimi-k3",
+    "displayName": "Kimi K3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "defaultEffort": "max",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "canDisableThinking": false
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 1000000,
+    "order": 17
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "kimi-k2.7-code",
+    "displayName": "Kimi K2.7 Code",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "canDisableThinking": false,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "order": 18
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "kimi-k2.7-code-highspeed",
+    "displayName": "Kimi K2.7 Code HighSpeed",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "canDisableThinking": false,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "order": 19
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "kimi-k2.6",
+    "displayName": "Kimi-K2.6",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "order": 20
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "minimax-m3",
+    "displayName": "MiniMax-M3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 524288,
+    "order": 21
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "minimax-m2.7",
+    "displayName": "MiniMax-M2.7",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 22
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "mimo-v2.5-pro",
+    "displayName": "MiMo-V2.5-Pro",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 23
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek-v4-pro-0813",
+    "displayName": "DeepSeek-V4-Pro 0813 (Official version)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 24
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek-v4.1-flash",
+    "displayName": "DeepSeek-V4.1-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 25
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "deepseek/deepseek-flash",
+    "displayName": "DeepSeek-V4.1-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 26
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "glm-5.3-flashx",
+    "displayName": "GLM-5.3-FlashX",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "high",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 27
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "kimi-k2.8-preview",
+    "displayName": "Kimi K2.8 Preview",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 1000000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ]
+    },
+    "order": 28
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "mimo-v2.6-pro",
+    "displayName": "MiMo-V2.6-Pro",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 29
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "mimo-v2.6-flash",
+    "displayName": "MiMo-V2.6-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 30
+   },
+   {
+    "providerId": "tencent-tokenhub-sg",
+    "model": "step-5-preview",
+    "displayName": "Step 5 Preview",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "supportsReasoning": true,
+    "order": 31
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "hy4-preview",
+    "displayName": "Hy4 preview",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxOutputTokens": 65536,
+    "supportsReasoning": true,
+    "maxInputTokens": 983040,
+    "order": 1
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "hy3",
+    "displayName": "Hy3",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 192000,
+    "maxOutputTokens": 128000,
+    "order": 2,
+    "recommended": true
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek-v4-flash-202605",
+    "displayName": "DeepSeek-V4-Flash (Official version,Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 3
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek-v4-pro-202606",
+    "displayName": "DeepSeek-V4-Pro (Official version,Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 4
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek/deepseek-v4-flash-vision-exp",
+    "displayName": "DeepSeek-V4-Flash-Vision-Exp (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 5
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek-v4-flash-0731",
+    "displayName": "DeepSeek-V4-Flash 0731 (Official version)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 6
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek-v4-flash",
+    "displayName": "DeepSeek-V4-Flash",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 7
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek-v4-pro",
+    "displayName": "DeepSeek-V4-Pro",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 8
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek-v3.2",
+    "displayName": "DeepSeek-V3.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 98304,
+    "maxOutputTokens": 32768,
+    "supportsReasoning": true,
+    "order": 9
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "glm-5.3-flash",
+    "displayName": "GLM-5.3-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "high",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 10
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "glm-5.3",
+    "displayName": "GLM-5.3",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "max",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 11
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "glm-5.2",
+    "displayName": "GLM-5.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "order": 12
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "glm-5.1",
+    "displayName": "GLM-5.1",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 13
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "glm-5v-turbo",
+    "displayName": "GLM-5V-Turbo",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 14
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "glm-5-turbo",
+    "displayName": "GLM-5-Turbo",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 15
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "glm-5",
+    "displayName": "GLM-5",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 16
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "kimi-k3",
+    "displayName": "Kimi K3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "defaultEffort": "max",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "canDisableThinking": false
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 1000000,
+    "order": 17
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "kimi-k2.7-code",
+    "displayName": "Kimi K2.7 Code",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "canDisableThinking": false,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "order": 18
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "kimi-k2.7-code-highspeed",
+    "displayName": "Kimi K2.7 Code HighSpeed",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "canDisableThinking": false,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "order": 19
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "kimi-k2.6",
+    "displayName": "Kimi-K2.6",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 262144,
+    "maxOutputTokens": 262144,
+    "order": 20
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "minimax-m3",
+    "displayName": "MiniMax-M3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 524288,
+    "order": 21
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "minimax-m2.7",
+    "displayName": "MiniMax-M2.7",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 22
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "mimo-v2.5-pro",
+    "displayName": "MiMo-V2.5-Pro",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 23
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek-v4-pro-0813",
+    "displayName": "DeepSeek-V4-Pro 0813 (Official version)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "order": 24
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek-v4.1-flash",
+    "displayName": "DeepSeek-V4.1-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 25
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "deepseek/deepseek-flash",
+    "displayName": "DeepSeek-V4.1-Flash (Vendor Direct)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 26
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "glm-5.3-flashx",
+    "displayName": "GLM-5.3-FlashX",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "reasoning": {
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "high",
+     "canDisableThinking": false
+    },
+    "onlyReasoning": true,
+    "order": 27
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "kimi-k2.8-preview",
+    "displayName": "Kimi K2.8 Preview",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 1000000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ]
+    },
+    "order": 28
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "mimo-v2.6-pro",
+    "displayName": "MiMo-V2.6-Pro",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 29
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "mimo-v2.6-flash",
+    "displayName": "MiMo-V2.6-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 30
+   },
+   {
+    "providerId": "tencent-tokenhub",
+    "model": "step-5-preview",
+    "displayName": "Step 5 Preview",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "supportsReasoning": true,
+    "order": 31
+   },
+   {
+    "providerId": "glm-open-platform",
+    "model": "glm-5.3",
+    "displayName": "GLM-5.3",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "supportsReasoning": true,
+    "order": 1,
+    "recommended": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "canDisableThinking": false,
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "defaultEffort": "max"
+    }
+   },
+   {
+    "providerId": "glm-open-platform",
+    "model": "glm-5.2",
+    "displayName": "GLM-5.2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "order": 2
+   },
+   {
+    "providerId": "glm-open-platform",
+    "model": "glm-5",
+    "displayName": "GLM-5",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 3
+   },
+   {
+    "providerId": "glm-open-platform",
+    "model": "glm-4.7",
+    "displayName": "GLM-4.7",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 4
+   },
+   {
+    "providerId": "glm-open-platform",
+    "model": "glm-4.6v",
+    "displayName": "GLM-4.6V",
+    "supportsTools": true,
+    "supportsImages": true,
+    "order": 5
+   },
+   {
+    "providerId": "kimi-intl",
+    "model": "kimi-k3",
+    "displayName": "Kimi K3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "onlyReasoning": true,
+    "reasoning": {
+     "defaultEffort": "max",
+     "supportedEfforts": [
+      "low",
+      "high",
+      "max"
+     ],
+     "canDisableThinking": false
+    },
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "kimi-intl",
+    "model": "kimi-k2.6",
+    "displayName": "Kimi K2.6",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 2
+   },
+   {
+    "providerId": "kimi-intl",
+    "model": "kimi-k2.5",
+    "displayName": "Kimi K2.5",
+    "supportsTools": true,
+    "supportsImages": true,
+    "order": 3
+   },
+   {
+    "providerId": "kimi-intl",
+    "model": "kimi-k2-turbo-preview",
+    "displayName": "Kimi K2 Turbo Preview",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 4
+   },
+   {
+    "providerId": "kimi-intl",
+    "model": "kimi-k2-thinking-turbo",
+    "displayName": "Kimi K2 Thinking Turbo",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 5
+   },
+   {
+    "providerId": "kimi-intl",
+    "model": "kimi-k2-thinking",
+    "displayName": "Kimi K2 Thinking",
+    "supportsTools": true,
+    "supportsImages": false,
+    "supportsReasoning": true,
+    "order": 6
+   },
+   {
+    "providerId": "kimi-intl",
+    "model": "kimi-k2-0905-preview",
+    "displayName": "Kimi K2 (2024-09-05 Preview)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 7
+   },
+   {
+    "providerId": "kimi-intl",
+    "model": "kimi-k2-0711-preview",
+    "displayName": "Kimi K2 (2024-07-11 Preview)",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 8
+   },
+   {
+    "providerId": "minimax-intl",
+    "model": "MiniMax-M3",
+    "displayName": "MiniMax-M3",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 524288,
+    "supportsReasoning": true,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "minimax-intl",
+    "model": "MiniMax-M2.5",
+    "displayName": "MiniMax-M2.5",
+    "supportsTools": true,
+    "supportsImages": true,
+    "order": 2
+   },
+   {
+    "providerId": "minimax-intl",
+    "model": "MiniMax-M2.5-highspeed",
+    "displayName": "MiniMax-M2.5 High Speed",
+    "supportsTools": true,
+    "supportsImages": true,
+    "order": 3
+   },
+   {
+    "providerId": "minimax-intl",
+    "model": "MiniMax-M2.1",
+    "displayName": "MiniMax-M2.1",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 4
+   },
+   {
+    "providerId": "minimax-intl",
+    "model": "MiniMax-M2.1-highspeed",
+    "displayName": "MiniMax-M2.1 High Speed",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 5
+   },
+   {
+    "providerId": "minimax-intl",
+    "model": "MiniMax-M2",
+    "displayName": "MiniMax-M2",
+    "supportsTools": true,
+    "supportsImages": false,
+    "order": 6
+   },
+   {
+    "providerId": "deepseek",
+    "model": "deepseek-v4-pro",
+    "displayName": "DeepSeek-V4 Pro",
+    "supportsTools": true,
+    "supportsImages": false,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "deepseek",
+    "model": "deepseek-flash",
+    "displayName": "DeepSeek-V4.1-Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "supportsReasoning": true,
+    "reasoning": {
+     "defaultEffort": "high",
+     "supportedEfforts": [
+      "high",
+      "max"
+     ]
+    },
+    "order": 2
+   },
+   {
+    "providerId": "gemini",
+    "model": "gemini-3.5-flash",
+    "displayName": "Gemini 3.5 Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 1,
+    "recommended": true
+   },
+   {
+    "providerId": "gemini",
+    "model": "gemini-3.1-pro-preview",
+    "displayName": "Gemini 3.1 Pro",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 2,
+    "status": "Preview"
+   },
+   {
+    "providerId": "gemini",
+    "model": "gemini-3.1-flash",
+    "displayName": "Gemini 3.1 Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 3
+   },
+   {
+    "providerId": "gemini",
+    "model": "gemini-3.1-flash-lite",
+    "displayName": "Gemini 3.1 Flash-Lite",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 4
+   },
+   {
+    "providerId": "gemini",
+    "model": "gemini-3-flash-preview",
+    "displayName": "Gemini 3 Flash (Preview)",
+    "supportsTools": true,
+    "supportsImages": true,
+    "order": 5,
+    "status": "Preview"
+   },
+   {
+    "providerId": "gemini",
+    "model": "gemini-2.5-pro",
+    "displayName": "Gemini 2.5 Pro",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 6
+   },
+   {
+    "providerId": "gemini",
+    "model": "gemini-2.5-flash",
+    "displayName": "Gemini 2.5 Flash",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 7
+   },
+   {
+    "providerId": "gemini",
+    "model": "gemini-2.5-flash-lite",
+    "displayName": "Gemini 2.5 Flash-Lite",
+    "supportsTools": true,
+    "supportsImages": true,
+    "supportsReasoning": true,
+    "order": 8
+   }
+  ],
+  "selectorPresentation": {
+   "customGroupLabel": {
+    "zh": "自定义模型",
+    "en": "Custom models"
+   },
+   "footerActionLabel": {
+    "zh": "配置自定义模型",
+    "en": "Configure custom models"
+   },
+   "footerAction": "openSettingsAndCreate"
+  },
+  "rolloutPolicy": {
+   "configVersion": "overseas-v1",
+   "enabled": true,
+   "updatedAt": "2026-04-30",
+   "fallbackToLocalDefault": true
+  }
+ }
+}
