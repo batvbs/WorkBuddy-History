@@ -130,8 +130,25 @@ id, 支持工具, 支持图片, 支持思考, 推理档位, 默认档位, 上下
 ## 怎么重新生成
 
 数据和它的提取脚本不在这个目录里（脚本是一次性工具）。要重新生成的话：
-1. 用 asar 工具解出 `D:/APP/WorkBuddyAI/resources/app.asar` 里的
-   `/main/common.js` 和 `/renderer/assets/contexts-*.js`
-2. 从 `contexts-*.js` 里抠 `{"id":"...","name":"...","api":"...","baseUrl":"..."}` 对象 → 内置清单
-3. 从 `contexts-*.js` 里抠 `{providerId:`x`,model:`y`,...}` 对象 → 预设表
-4. 按上面的口径（只采信官方自营 provider）翻成 model.csv 的行
+
+**第一步是把真正生效的那份配置拉下来**——客户端「添加自定义模型」用的是远端配置，
+不是安装包里的表（见上文「先搞清哪份才是客户端真正在用的」）。只从安装包里抠，
+覆盖率会停在 79.6% / 76.2% 那档：
+
+1. 两版远端配置都 GET 下来存档（无需登录）：
+   - 国际版 `https://download.codebuddy.ai/connectors-config-v2/custom-model/customModelSettings.json`
+     → 存成 `preset-models-intl.json`
+   - 国内版 `https://static.workbuddy.cn/connectors-config-v2/custom-model/customModelSettings.json`
+     → 存成 `preset-models-cn.json`
+2. 用 asar 工具解出 `D:/APP/WorkBuddyAI/resources/app.asar` 里的
+   `/main/common.js` 和 `/renderer/assets/contexts-*.js`（这里取的是**内置清单**；
+   `contexts-*.js` 里那张 94 条的预设表只是拉取失败时的**兜底**，别拿它当预设来源）
+3. 从 `contexts-*.js` 里抠 `{"id":"...","name":"...","api":"...","baseUrl":"..."}` 对象 → 内置清单
+4. 按上面的口径（只采信官方自营 provider）把**远端配置**和内置清单翻成 model.csv 的行
+5. **手工补上数据源里没有的那几类条目**，否则覆盖率到不了文档里写的 96%。
+   这些在内置表和远端配置里都没有、或不全，是人工加的，重跑一遍不会自动带上：
+   - 混元 `hunyuan-*` / `hy4*`（内置清单里一条腾讯/混元都没有，见上文「混元系列」）
+   - 小米 `mimo-*`（`mimo-v2.5-pro` / `mimo-v2.6-pro` / `mimo-v2.6-flash`）
+   - 阶跃 `step-*`（`step-5-preview`）
+   - 带 vendor 前缀的 id，如 `deepseek/deepseek-flash` /
+     `deepseek/deepseek-v4-flash-vision-exp`
