@@ -1,11 +1,13 @@
 <#
-  WorkBuddy Keeper 1.5.5
+  WorkBuddy Keeper 1.7.0
   Session backup / restore + account switch for the WorkBuddy desktop client.
   Supports both editions (China and international) side by side.
 
   Design notes
   - Zero dependency: runs on the Windows PowerShell 5.1 that ships with Windows 10/11.
-  - No SQLite, no external modules, no network access. Everything is plain file copying.
+  - No SQLite, no external modules. Conversations, accounts and backups are handled
+    with plain file copying only; the sole outbound requests are the model
+    probes, which go to the endpoint the user configures.
   - Session data lives in the per-edition home (workbuddy.db + projects/**):
         China edition          %USERPROFILE%\.workbuddy
         international edition  %USERPROFILE%\.workbuddy-ai
@@ -35,7 +37,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$AppVersion = '1.5.5'
+$AppVersion = '1.7.0'
 
 # --------------------------------------------------------------------------
 # paths
@@ -84,6 +86,7 @@ $script:SessionCache = @{}
 $script:SessionCacheAt = @{}
 $script:InstancePath = Join-Path $DataDir 'instance.json'
 $script:WindowWatch = $false      # true once we opened an app window ourselves
+$script:ListenPort = 0            # set once the listener binds; used to check Host
 $script:SawWindow = $false
 $script:WinGone = 0
 $script:LastWinCheck = Get-Date
@@ -141,9 +144,21 @@ function Get-FolderSize([string]$path) {
 }
 
 function Copy-Tree([string]$src, [string]$dst) {
+    # Copy the CONTENTS of $src into $dst.
+    #
+    # NOT `Copy-Item -LiteralPath $src -Destination $dst -Recurse`: when $dst
+    # already exists (which it always does here, because the caller joins the
+    # same leaf name), Copy-Item puts the source directory INSIDE the
+    # destination, so the result lands one level too deep -
+    # dst\AAA\AAA\inner\f.txt instead of dst\AAA\inner\f.txt. Verified by
+    # experiment. Since the callers use this for attachment folders, the
+    # attachments ended up somewhere the client never looks, and
+    # -ErrorAction SilentlyContinue kept it quiet.
     if (-not (Test-Path -LiteralPath $src)) { return }
     if (-not (Test-Path -LiteralPath $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
-    Copy-Item -LiteralPath $src -Destination $dst -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($c in @(Get-ChildItem -LiteralPath $src -Force -ErrorAction SilentlyContinue)) {
+        Copy-Item -LiteralPath $c.FullName -Destination $dst -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Mask-Uin([string]$uin) {
@@ -619,10 +634,2833 @@ function Find-NicknameAny([hashtable]$map, [string]$uid) {
     return ''
 }
 
+function Get-ModelVendorHint([string]$id, [string]$name) {
+    # Guesses the client's "vendor" value from a model id / display name, using
+    # the same keyword rules the UI uses for its automatic icon match. The
+    # client picks the icon by looking this vendor up in its built-in provider
+    # table, so writing it is what makes an imported model show the right logo.
+    #
+    # Keep in sync with mdlAutoIconFor()/ICON_VENDOR in ui.html: the icon the
+    # batch list draws and the vendor that ends up in the file must agree, or a
+    # model would be shown with one logo and saved under another.
+    $hay = (([string]$id) + ' ' + ([string]$name)).ToLowerInvariant()
+    if (-not $hay.Trim()) { return '' }
+    # "hunyuan" spelled in code points so this file stays pure ASCII. The plain
+    # ascii word alone is not enough: models are often named in Chinese only
+    # (for example the Chinese spelling of "hunyuan" plus "-large"), and the
+    # UI's own rule table already matched that spelling -
+    # leaving it out here meant a Chinese-named Hunyuan row got vendor="Custom"
+    # from the server and the UI then trusted that over its own rule, so the
+    # model lost its logo. Keep this list in sync with mdlAutoIconFor().
+    $hunyuanZh = [string]([char]0x6DF7 + [char]0x5143)
+    $rules = @(
+        @('kimi', 'Kimi'), @('moonshot', 'Kimi'),
+        @('glm', 'GLM API'), @('zhipu', 'GLM API'), @('chatglm', 'GLM API'),
+        @('deepseek', 'DeepSeek'),
+        @('minimax', 'MiniMax'), @('abab', 'MiniMax'),
+        @('hunyuan', 'Hunyuan'), @($hunyuanZh, 'Hunyuan'),
+        @('gpt', 'OpenAI'), @('openai', 'OpenAI'),
+        @('gemini', 'Google Gemini'), @('google', 'Google Gemini'),
+        @('claude', 'Claude'), @('anthropic', 'Claude'),
+        @('mistral', 'Mistral AI'),
+        @('groq', 'Groq'),
+        @('together', 'Together AI'),
+        @('fireworks', 'Fireworks AI'),
+        @('perplexity', 'Perplexity')
+    )
+    foreach ($r in $rules) {
+        if ($hay.Contains([string]$r[0])) { return [string]$r[1] }
+    }
+    # OpenAI's reasoning ids are "o1", "o1-mini", "o3", "o3-mini" ... Matching
+    # only the "o1-"/"o3-" spellings missed the bare ones, which then fell
+    # through to Custom. Anchored so a random id ending in "o1" is not caught.
+    if ($hay -match '(^|[\s\-_/])o[13](\b|[\s\-_/])') { return 'OpenAI' }
+    return 'Custom'
+}
+
+function New-ListingItem($it, [string]$mid) {
+    # One entry of a /models response, normalised. Only fields the client
+    # actually understands are kept; the rest of the payload (created,
+    # owned_by, supported_endpoint_types, ...) is noise for our purpose.
+    #
+    # The capability fields are read on a best-effort basis because gateways
+    # differ wildly: DeepSeek reports context_window / max_output_tokens /
+    # effort, others report none of them. Missing stays missing (0 / empty) so
+    # the batch importer can tell "the listing did not say" from "it said no",
+    # which is exactly what decides whether model.csv has to fill the gap.
+    $o = [pscustomobject]@{
+        id               = $mid
+        name             = [string](Get-ModelProp $it 'name')
+        vendor           = (Get-ModelVendorHint $mid ([string](Get-ModelProp $it 'name')))
+        # 0 / '' mean "the listing did not tell us".
+        maxInputTokens   = 0
+        maxOutputTokens  = 0
+        supportsImages   = $false
+        supportsImagesSet = $false
+        supportsReasoning = $false
+        supportsReasoningSet = $false
+        supportedEfforts = @()
+        defaultEffort    = ''
+    }
+    if (-not $o.name) {
+        $dn = Get-ModelProp $it 'display_name'
+        if ($null -ne $dn) { $o.name = [string]$dn }
+    }
+
+    $v = Get-ModelProp $it 'context_window'
+    if ($null -eq $v) { $v = Get-ModelProp $it 'context_length' }
+    if ($null -eq $v) { $v = Get-ModelProp $it 'max_input_tokens' }
+    if ($null -ne $v) { try { $o.maxInputTokens = [long]$v } catch { } }
+
+    $v = Get-ModelProp $it 'max_output_tokens'
+    if ($null -ne $v) { try { $o.maxOutputTokens = [long]$v } catch { } }
+
+    # input_modalities: ["text","image"] -> supportsImages
+    $mods = Get-ModelProp $it 'input_modalities'
+    if ($null -ne $mods) {
+        foreach ($mm in (To-ItemArray $mods)) {
+            if (([string]$mm).ToLowerInvariant() -eq 'image') { $o.supportsImages = $true }
+        }
+        $o.supportsImagesSet = $true
+    }
+
+    # effort comes as {"supported_levels":[...], "default_level":"..."}; some
+    # gateways instead put a plain array under "supported_efforts".
+    $eff = Get-ModelProp $it 'effort'
+    if ($null -ne $eff) {
+        $lv = Get-ModelProp $eff 'supported_levels'
+        if ($null -eq $lv) { $lv = Get-ModelProp $eff 'supportedEfforts' }
+        if ($null -ne $lv) {
+            $acc = New-Object System.Collections.Generic.List[string]
+            foreach ($e in (To-ItemArray $lv)) {
+                $s = ([string]$e).Trim()
+                if ($s) { $acc.Add($s) }
+            }
+            if ($acc.Count -gt 0) { $o.supportedEfforts = $acc.ToArray(); $o.supportsReasoningSet = $true; $o.supportsReasoning = $true }
+        }
+        $dl = Get-ModelProp $eff 'default_level'
+        if ($null -eq $dl) { $dl = Get-ModelProp $eff 'defaultEffort' }
+        if ($null -ne $dl) { $o.defaultEffort = ([string]$dl).Trim() }
+    }
+    return $o
+}
+
+function Get-ModelsPath([string]$product) {
+    # models.json lives next to the per-edition data root, not inside it: the
+    # China edition is %USERPROFILE%\.workbuddy\models.json and the
+    # international one %USERPROFILE%\.workbuddy-ai\models.json.
+    # Not $home: that is a read-only built-in variable in PowerShell.
+    $edRoot = Get-EditionHome $product
+    if (-not $edRoot) { return '' }
+    return (Join-Path $edRoot 'models.json')
+}
+
+function Get-ModelsRaw([string]$product) {
+    # Returns the file text plus a reason when it is unusable. The client parses
+    # this file with a plain JSON.parse and gives up silently on a syntax error,
+    # so "is it valid" and "can I safely rewrite it" are the same question.
+    $path = Get-ModelsPath $product
+    $out = [pscustomobject]@{
+        path  = $path
+        exists = $false
+        text  = ''
+        valid = $false
+        error = ''
+        shape = 'none'
+        wrapper = $null
+        items = (New-Object System.Collections.Generic.List[object])
+    }
+    if (-not $path) { $out.error = 'unknown_edition'; return $out }
+    if (-not (Test-Path -LiteralPath $path)) {
+        # Say so explicitly. The viewer shows a completely different message for
+        # "not created yet" than for "exists but unreadable", and an empty code
+        # would make a fresh install look like a corrupted file.
+        $out.error = 'models_missing'
+        return $out
+    }
+    $out.exists = $true
+    try {
+        $out.text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+    } catch {
+        $out.error = 'read_failed'
+        return $out
+    }
+    if (-not $out.text.Trim()) { $out.error = 'models_empty'; return $out }
+    $parsed = ConvertFrom-ModelsText $out.text
+    $out.shape = $parsed.shape
+    $out.wrapper = $parsed.wrapper
+    $out.items = $parsed.items
+    if (-not $parsed.ok) {
+        $out.error = 'models_malformed'
+        return $out
+    }
+    $out.valid = $true
+    return $out
+}
+
+function ConvertFrom-ModelsText([string]$text) {
+    # models.json comes in two shapes and both have to be handled:
+    #   [ {...}, {...} ]                 - a bare array (what this machine has)
+    #   { "models": [ {...} ], ... }     - a wrapper object
+    # The client accepts either. Returns the entries plus which shape was found,
+    # so a write can be put back in the same shape it came from.
+    #
+    # items is a List, never a PowerShell array: an array returned from a
+    # function is unrolled by the pipeline, so a one-entry list would arrive as
+    # the bare entry and a wrapper property holding it looks like a scalar.
+    $items = New-Object System.Collections.Generic.List[object]
+    $out = [pscustomobject]@{ items = $items; shape = 'none'; ok = $false; wrapper = $null }
+    if (-not $text -or -not $text.Trim()) { return $out }
+    try {
+        # Parsing without -InputObject keeps the top-level array intact; going
+        # through the pipeline would emit its members one by one instead.
+        $doc = $text | ConvertFrom-Json
+    } catch {
+        return $out
+    }
+    $out.ok = $true
+
+    # Unroll explicitly, one level deep, whatever the top level turned out to be.
+    $top = New-Object System.Collections.Generic.List[object]
+    if ($null -ne $doc) {
+        if ($doc -is [array]) { foreach ($e in $doc) { $top.Add($e) } }
+        else { $top.Add($doc) }
+    }
+
+    if ($top.Count -ge 1) {
+        $first = $top[0]
+        $mm = $null
+        if ($null -ne $first -and -not ($first -is [string]) -and -not ($first -is [ValueType])) {
+            $mm = $first.PSObject.Properties['models']
+        }
+        if ($null -ne $mm) {
+            # Wrapper object: entries live under "models". Keep the rest of the
+            # wrapper (availableModels and anything else) so a write does not
+            # silently drop keys that are nothing to do with this edit.
+            $out.shape = 'object'
+            $out.wrapper = $first
+            $inner = $mm.Value
+            if ($null -ne $inner) {
+                if ($inner -is [array]) { foreach ($e in $inner) { $items.Add($e) } }
+                else { $items.Add($inner) }
+            }
+            return $out
+        }
+    }
+
+    # Bare array (or an empty one).
+    $out.shape = 'array'
+    foreach ($e in $top) { $items.Add($e) }
+    return $out
+}
+
+function New-ModelsProps($entry) {
+    # Keep the key order the user already has. Property order is preserved on
+    # read, so re-serialising an untouched entry reproduces its own layout
+    # instead of shuffling the file every time something else is edited.
+    $props = New-Object 'System.Collections.Specialized.OrderedDictionary'
+    foreach ($p in $entry.PSObject.Properties) { $props[$p.Name] = $p.Value }
+    return $props
+}
+
+function Find-ModelEntryIndex($items, [string]$id, [int]$hint = -1) {
+    # Index of the entry the user means when they act on $id, or -1.
+    #
+    # Duplicates are normal here: importing a model that already exists leaves a
+    # visible entry plus a hidden twin, and both answer to the same id.
+    #
+    # $hint is the array position the UI saw, and when it is usable it WINS.
+    # That is what makes acting on a hidden card work: the card is identified by
+    # (id, position), and an id-only lookup would always resolve to the visible
+    # twin - so clicking delete on the hidden card removed the visible one, and
+    # clicking show on it did nothing at all (both verified). The hint is only
+    # trusted when the entry at that position still carries the same id, so a
+    # file changed in the client meanwhile falls back to the id rule instead of
+    # hitting an unrelated row.
+    #
+    # Without a usable hint the visible twin still wins: that is the right
+    # default for callers that only have an id (the editor opened from a list).
+    # Falling back to a hidden twin keeps a purely hidden entry editable.
+    #
+    # The group-title marker is skipped outright. It is bookkeeping, not a model:
+    # it never appears in the list, so an id lookup must never land on it - doing
+    # so would silently destroy the group's title, or rewrite the marker instead
+    # of the model the user actually clicked.
+    if ($hint -ge 0 -and $null -ne $items -and $hint -lt $items.Count) {
+        $he = $items[$hint]
+        if ($null -ne $he -and -not (Test-GroupMarker $he) -and $id -and ((Get-ModelKey $he) -eq $id)) {
+            return $hint
+        }
+    }
+    if (-not $id) { return -1 }
+    $hiddenIdx = -1
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $e = $items[$i]
+        if ($null -eq $e) { continue }
+        if (Test-GroupMarker $e) { continue }
+        if ((Get-ModelKey $e) -ne $id) { continue }
+        if (-not (Test-ModelArchived $e)) { return $i }
+        if ($hiddenIdx -lt 0) { $hiddenIdx = $i }
+    }
+    return $hiddenIdx
+}
+
+function Get-ModelStoredApiKey([string]$product, [string]$id) {
+    # The plain-text key already in the file for this model. Duplicates resolve
+    # the same way as everywhere else, so the key belongs to the same entry an
+    # edit would land on.
+    #
+    # Returns '' for an ENCRYPTED key, and the order below is load-bearing:
+    # Test-WbEncrypted decides by looking for an "envelope" property, so it has
+    # to receive the RAW value. Casting to [string] first turned the envelope
+    # object into "@{envelope=...}" - a string, which Test-WbEncrypted then
+    # correctly reported as "not encrypted" - and that text was sent to the
+    # endpoint as the API key. Check first, convert only after.
+    if (-not $id) { return '' }
+    $raw = Get-ModelsRaw $product
+    if (-not $raw.valid) { return '' }
+    $idx = Find-ModelEntryIndex $raw.items $id
+    if ($idx -lt 0) { return '' }
+    $rawKey = Get-ModelProp $raw.items[$idx] 'apiKey'
+    if ($null -eq $rawKey) { return '' }
+    if (Test-WbEncrypted $rawKey) { return '' }
+    $stored = [string]$rawKey
+    if ($stored) { return $stored }
+    return ''
+}
+
+function Test-WbEncrypted($v) {
+    # The client can store apiKey as an encrypted envelope when at-rest
+    # protection is on. Indexing such a value would deep-copy its guts and
+    # re-emit them as plain JSON, so it has to be handed back verbatim.
+    if ($null -eq $v) { return $false }
+    if ($v -is [string]) { return $false }
+    if ($v -is [array]) { return $false }
+    if ($v -is [ValueType]) { return $false }
+    try { return ($null -ne $v.PSObject.Properties['envelope']) } catch { return $false }
+}
+
+function To-ItemArray($v) {
+    # Normalise anything into a real array of items. Two traps here:
+    #   * @(...) on a value that is already an array nests it one level deeper;
+    #   * returning a PowerShell array from a function unrolls it, so a
+    #     one-element array arrives as the bare element.
+    # The leading comma in the return defeats that unrolling, so the caller
+    # always gets an array back. Callers that only want a count can use
+    # (To-ItemArray $v).Count - the returned array is a real Object[].
+    if ($null -eq $v) { return ,@() }
+    if ($v -is [string] -or $v -is [ValueType]) { return ,@($v) }
+    if ($v -is [System.Collections.IEnumerable]) {
+        $tmp = New-Object System.Collections.Generic.List[object]
+        foreach ($e in $v) { $tmp.Add($e) }
+        return ,$tmp.ToArray()
+    }
+    return ,@($v)
+}
+
+# Hiding works by RENAMING the id key, not by changing its value:
+#   normal: { "id": "foo", ... }
+#   hidden: { "-id": "foo", ... }
+#
+# The client keeps only entries where the expression !!t.id is true, so a
+# missing id key makes it drop the entry silently while every other field is
+# left untouched. Changing the VALUE instead ("id": "-foo") does NOT work:
+# "-foo" is a non-empty string, so the entry survives and simply shows up as a
+# model called "-foo". That is the difference between "gone from the client"
+# and "still there under a weird name".
+$script:HiddenIdKey = '-id'
+
+function Test-PropsHasKey($entry, [string]$name) {
+    # Two entry shapes reach these helpers: an object straight out of
+    # ConvertFrom-Json (properties surface via PSObject.Properties) and an
+    # OrderedDictionary built by New-ModelsProps (whose keys do NOT show up
+    # there - PSObject.Properties['id'] is null on a dictionary). Check both,
+    # otherwise a lookup silently misses every entry on one of the two paths.
+    if ($null -eq $entry) { return $false }
+    if ($entry -is [System.Collections.Specialized.OrderedDictionary]) {
+        return $entry.Contains($name)
+    }
+    return ($null -ne $entry.PSObject.Properties[$name])
+}
+
+function Get-ModelKey($entry) {
+    # The id used for display and for finding the entry. A hidden entry keeps
+    # its id under the "-id" key, so both spellings resolve to the same key -
+    # which is why a hidden entry can still be edited, deleted and unhidden.
+    if ($null -eq $entry) { return '' }
+    if ($entry -is [System.Collections.Specialized.OrderedDictionary]) {
+        if ($entry.Contains('id')) { return [string]$entry['id'] }
+        if ($entry.Contains($script:HiddenIdKey)) { return [string]$entry[$script:HiddenIdKey] }
+        return ''
+    }
+    $p = $entry.PSObject.Properties['id']
+    if ($null -ne $p) { return [string]$p.Value }
+    $p = $entry.PSObject.Properties[$script:HiddenIdKey]
+    if ($null -ne $p) { return [string]$p.Value }
+    return ''
+}
+
+function Test-ModelArchived($entry) {
+    # Hidden means: no "id" key, but a "-id" key holding the value.
+    if ($null -eq $entry) { return $false }
+    if (Test-PropsHasKey $entry 'id') { return $false }
+    return (Test-PropsHasKey $entry $script:HiddenIdKey)
+}
+
+function Set-ModelHiddenKey($props, [bool]$hide, [string]$id) {
+    # Swap which of the two keys holds the id. The key ORDER is what the client
+    # walks, so the marker is put where "id" used to sit - otherwise a hidden
+    # entry would come back with its id moved to the end of the object.
+    $names = @($props.Keys)
+    $pos = $names.Count
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        if ($names[$i] -eq 'id' -or $names[$i] -eq $script:HiddenIdKey) { $pos = $i; break }
+    }
+    $rebuilt = New-Object 'System.Collections.Specialized.OrderedDictionary'
+    $placed = $false
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        $n = $names[$i]
+        if ($n -eq 'id' -or $n -eq $script:HiddenIdKey) { continue }
+        if ($i -gt $pos -and -not $placed) {
+            $rebuilt[$(if ($hide) { $script:HiddenIdKey } else { 'id' })] = $id
+            $placed = $true
+        }
+        $rebuilt[$n] = $props[$n]
+    }
+    if (-not $placed) {
+        $rebuilt[$(if ($hide) { $script:HiddenIdKey } else { 'id' })] = $id
+    }
+    return $rebuilt
+}
+
+function Get-ModelProp($entry, [string]$name) {
+    # Value of one property, or $null when the field is not present at all.
+    # "absent" and "present but null" are different here: absent means leave
+    # whatever the file already has alone.
+    if ($null -eq $entry) { return $null }
+    $p = $entry.PSObject.Properties[$name]
+    if ($null -eq $p) { return $null }
+    return $p.Value
+}
+
+function Test-ModelProp($entry, [string]$name) {
+    if ($null -eq $entry) { return $false }
+    return ($null -ne $entry.PSObject.Properties[$name])
+}
+
+function ConvertTo-ModelEntry($raw) {
+    # Normalised view for the editor. Every field is optional: an entry that
+    # only carries id + url still has to round-trip without gaining fields.
+    $o = [pscustomobject]@{
+        id                 = ''
+        name               = ''
+        vendor             = ''
+        url                = ''
+        apiKey             = ''
+        apiKeyState        = 'absent'
+        supportsToolCall   = $false
+        supportsImages     = $false
+        supportsReasoning  = $false
+        supportsToolCallSet   = $false
+        supportsImagesSet     = $false
+        supportsReasoningSet  = $false
+        maxInputTokens     = 0
+        maxOutputTokens    = 0
+        temperature        = $null
+        useCustomProtocol  = $false
+        useCustomProtocolSet = $false
+        defaultEffort      = ''
+        supportedEfforts   = @()
+        hidden             = $false
+        canDisableThinking    = $true
+        canDisableThinkingSet = $false
+        icon               = ''
+        rawId              = ''
+    }
+    if ($null -eq $raw) { return $o }
+
+    # The id is read from whichever key holds it ("id" or the hidden "-id"),
+    # so a hidden entry still presents its real id to the editor.
+    $o.id = (Get-ModelKey $raw)
+    $o.hidden = (Test-ModelArchived $raw)
+    $o.rawId = $o.id
+    if (Test-ModelProp $raw 'name')   { $o.name   = [string](Get-ModelProp $raw 'name') }
+    if (Test-ModelProp $raw 'vendor') { $o.vendor = [string](Get-ModelProp $raw 'vendor') }
+    if (Test-ModelProp $raw 'url')    { $o.url    = [string](Get-ModelProp $raw 'url') }
+    # The client picks which icon to draw from this field (iconUrl first, then
+    # icon, then guessing by name). Only the value is carried; the viewer decides
+    # what to render.
+    if (Test-ModelProp $raw 'icon')   { $o.icon   = [string](Get-ModelProp $raw 'icon') }
+
+    if (Test-ModelProp $raw 'apiKey') {
+        $k = Get-ModelProp $raw 'apiKey'
+        if ($null -ne $k) {
+            if (Test-WbEncrypted $k) { $o.apiKeyState = 'encrypted' }
+            else { $o.apiKeyState = 'plain'; $o.apiKey = [string]$k }
+        }
+    }
+
+    $p = Get-ModelProp $raw 'supportsToolCall'
+    if ($null -ne $p) { $o.supportsToolCall = [bool]$p; $o.supportsToolCallSet = $true }
+    $p = Get-ModelProp $raw 'supportsImages'
+    if ($null -ne $p) { $o.supportsImages = [bool]$p; $o.supportsImagesSet = $true }
+    $p = Get-ModelProp $raw 'supportsReasoning'
+    if ($null -ne $p) { $o.supportsReasoning = [bool]$p; $o.supportsReasoningSet = $true }
+
+    $p = Get-ModelProp $raw 'maxInputTokens'
+    if ($null -ne $p) { $o.maxInputTokens = [long]$p }
+    $p = Get-ModelProp $raw 'maxOutputTokens'
+    if ($null -ne $p) { $o.maxOutputTokens = [long]$p }
+    $p = Get-ModelProp $raw 'temperature'
+    if ($null -ne $p) { $o.temperature = [double]$p }
+
+    $p = Get-ModelProp $raw 'useCustomProtocol'
+    if ($null -ne $p) { $o.useCustomProtocol = [bool]$p; $o.useCustomProtocolSet = $true }
+
+    if (Test-ModelProp $raw 'reasoning') {
+        $r = Get-ModelProp $raw 'reasoning'
+        if ($null -ne $r) {
+            $d = Get-ModelProp $r 'defaultEffort'
+            if ($null -ne $d) { $o.defaultEffort = [string]$d }
+            if (Test-ModelProp $r 'supportedEfforts') {
+                $list = New-Object System.Collections.Generic.List[string]
+                foreach ($e in (To-ItemArray (Get-ModelProp $r 'supportedEfforts'))) {
+                    if ($null -ne $e) { $list.Add([string]$e) }
+                }
+                $o.supportedEfforts = $list.ToArray()
+            }
+            # canDisableThinking=false is how the client records "thinking may
+            # not be turned off". The editor shows that as the default-effort
+            # "off" option, so it has to survive a read/write round trip.
+            $cd = Get-ModelProp $r 'canDisableThinking'
+            if ($null -ne $cd) { $o.canDisableThinking = [bool]$cd; $o.canDisableThinkingSet = $true }
+        }
+    }
+    return $o
+}
+
+function Get-ModelsList([string]$product) {
+    $raw = Get-ModelsRaw $product
+    if (-not $raw.valid) {
+        return [pscustomobject]@{
+            ok      = $false
+            code    = $raw.error
+            path    = $raw.path
+            exists  = $raw.exists
+            models  = @()
+            count   = 0
+        }
+    }
+    $arr = $raw.items
+    $list = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+    for ($ai = 0; $ai -lt $arr.Count; $ai++) {
+        $m = $arr[$ai]
+        if ($null -eq $m) { continue }
+        # An entry has to be an object. A stray string or number in the array
+        # would make every property lookup below meaningless.
+        if (-not ($m -is [psobject]) -or $m -is [string] -or $m -is [ValueType]) { continue }
+        # The group marker (title holder) is bookkeeping, not a model: it must
+        # never be listed, counted, or offered for editing.
+        if (Test-GroupMarker $m) { continue }
+        $e = ConvertTo-ModelEntry $m
+        $dup = $false
+        # Duplicates are judged on the effective id, so a hidden copy of an id
+        # still counts as a clash with its visible twin: the client would only
+        # ever see one of them after unhiding.
+        if ($e.id) {
+            if ($seen.ContainsKey($e.id)) { $dup = $true } else { $seen[$e.id] = $true }
+        }
+        $e = [pscustomobject]@{
+            id = $e.id; name = $e.name; vendor = $e.vendor; url = $e.url
+            icon = $e.icon
+            # Position in the models.json array. An id alone cannot address one
+            # entry when a visible copy and a hidden twin share it, which is the
+            # normal state after a repeated import: the user clicks the hidden
+            # card and an id-only lookup lands on the visible one. The UI sends
+            # this back, and the server only trusts it when the entry sitting at
+            # that position still carries the same effective id.
+            index = $ai
+            rawId = $e.rawId
+            apiKey = $e.apiKey; apiKeyState = $e.apiKeyState
+            supportsToolCall = $e.supportsToolCall; supportsImages = $e.supportsImages
+            supportsReasoning = $e.supportsReasoning
+            supportsToolCallSet = $e.supportsToolCallSet; supportsImagesSet = $e.supportsImagesSet
+            supportsReasoningSet = $e.supportsReasoningSet
+            maxInputTokens = $e.maxInputTokens; maxOutputTokens = $e.maxOutputTokens
+            temperature = $e.temperature
+            useCustomProtocol = $e.useCustomProtocol; useCustomProtocolSet = $e.useCustomProtocolSet
+            defaultEffort = $e.defaultEffort; supportedEfforts = @($e.supportedEfforts)
+            disabled = $e.disabled; disabledSet = $e.disabledSet
+            canDisableThinking = $e.canDisableThinking; canDisableThinkingSet = $e.canDisableThinkingSet
+            hidden = $e.hidden
+            fields = @($m.PSObject.Properties.Name)
+            duplicate = $dup
+        }
+        $list.Add($e)
+    }
+    return [pscustomobject]@{
+        ok     = $true
+        path   = $raw.path
+        exists = $raw.exists
+        shape  = $raw.shape
+        models = $list.ToArray()
+        count  = $list.Count
+    }
+}
+
+function ConvertTo-ModelsText($models) {
+    # Serialises the entry array. ConvertTo-Json cannot be used here:
+    #   * a one-element array comes back as a bare object, not an array;
+    #   * it escapes < > & as \u003c etc., so editing one model would rewrite
+    #     every unrelated string in the file;
+    #   * its key order follows the object, not the file.
+    # So the JSON is written by hand, in the order the entries already carry.
+    $body = New-Object System.Text.StringBuilder
+    [void]$body.Append("[")
+    for ($i = 0; $i -lt $models.Count; $i++) {
+        if ($i -gt 0) { [void]$body.Append(",") }
+        # Entries sit one level in, so their closing brace sits at column 2 and
+        # their members at column 4 - the same layout the file already has.
+        [void]$body.Append("`n  ")
+        [void]$body.Append((ConvertTo-JsonObject $models[$i] 2))
+    }
+    [void]$body.Append("`n]")
+    return $body.ToString()
+}
+
+function ConvertTo-ModelsDocument($models, [string]$shape, $wrapper) {
+    # Re-emit the whole file. In the wrapper form every key other than "models"
+    # is kept exactly as it was, so only the model list changes.
+    if ($shape -ne 'object' -or $null -eq $wrapper) {
+        return (ConvertTo-ModelsText $models) + "`n"
+    }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("{")
+    $first = $true
+    $sawModels = $false
+    foreach ($p in $wrapper.PSObject.Properties) {
+        if (-not $first) { [void]$sb.Append(",") }
+        $first = $false
+        [void]$sb.Append("`n  ")
+        [void]$sb.Append((ConvertTo-JsonString $p.Name))
+        [void]$sb.Append(": ")
+        if ($p.Name -eq 'models') {
+            $sawModels = $true
+            # Indent the array two columns deeper: it is the value of "models".
+            [void]$sb.Append((((ConvertTo-ModelsText $models).Replace("`n", "`n  ")).TrimStart()))
+        } else {
+            [void]$sb.Append((ConvertTo-JsonValue $p.Value 2))
+        }
+    }
+    if (-not $sawModels) {
+        if (-not $first) { [void]$sb.Append(",") }
+        [void]$sb.Append("`n  `"models`": ")
+        [void]$sb.Append((((ConvertTo-ModelsText $models).Replace("`n", "`n  ")).TrimStart()))
+    }
+    [void]$sb.Append("`n}`n")
+    return $sb.ToString()
+}
+
+function ConvertTo-JsonObject($props, [int]$closeIndent) {
+    # $closeIndent is the column the closing brace sits in. Members sit two
+    # columns further in, and so does the closing brace of every nested value -
+    # that is what keeps the output looking like the file the user already has
+    # instead of a reflowed version of it.
+    $names = @($props.Keys)
+    if ($names.Count -eq 0) { return '{}' }
+    $inner = New-Object System.Text.StringBuilder
+    $pad = ' ' * ($closeIndent + 2)
+    for ($j = 0; $j -lt $names.Count; $j++) {
+        $n = $names[$j]
+        if ($j -gt 0) { [void]$inner.Append(",") }
+        [void]$inner.Append("`n" + $pad)
+        [void]$inner.Append((ConvertTo-JsonString ([string]$n)))
+        [void]$inner.Append(": ")
+        [void]$inner.Append((ConvertTo-JsonValue $props[$n] ($closeIndent + 2)))
+    }
+    return ('{' + $inner.ToString() + "`n" + (' ' * $closeIndent) + '}')
+}
+
+function ConvertTo-JsonValue($v, [int]$indent) {
+    if ($null -eq $v) { return 'null' }
+    if ($v -is [bool]) { if ($v) { return 'true' } else { return 'false' } }
+    if ($v -is [int] -or $v -is [long] -or $v -is [double] -or $v -is [decimal] -or $v -is [single]) {
+        # InvariantCulture: on a comma-decimal locale "0.7" would otherwise be
+        # written as "0,7" and the JSON would not parse.
+        return ([double]$v).ToString([Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($v -is [string]) { return (ConvertTo-JsonString $v) }
+    if ($v -is [System.Collections.IDictionary]) {
+        $inner = New-Object System.Text.StringBuilder
+        $keys = @($v.Keys)
+        for ($i = 0; $i -lt $keys.Count; $i++) {
+            if ($i -gt 0) { [void]$inner.Append(",") }
+            [void]$inner.Append("`n" + (' ' * ($indent + 2)))
+            [void]$inner.Append((ConvertTo-JsonString ([string]$keys[$i])))
+            [void]$inner.Append(": ")
+            [void]$inner.Append((ConvertTo-JsonValue $v[$keys[$i]] ($indent + 2)))
+        }
+        if ($keys.Count -eq 0) { return '{}' }
+        return ('{' + $inner.ToString() + "`n" + (' ' * $indent) + '}')
+    }
+    if ($v -is [System.Collections.IEnumerable]) {
+        $items = To-ItemArray $v
+        if ($items.Count -eq 0) { return '[]' }
+        $inner = New-Object System.Text.StringBuilder
+        for ($i = 0; $i -lt $items.Count; $i++) {
+            if ($i -gt 0) { [void]$inner.Append(",") }
+            [void]$inner.Append("`n" + (' ' * ($indent + 2)))
+            [void]$inner.Append((ConvertTo-JsonValue $items[$i] ($indent + 2)))
+        }
+        return ('[' + $inner.ToString() + "`n" + (' ' * $indent) + ']')
+    }
+    # PSCustomObject from ConvertFrom-Json, and anything else object-like.
+    try {
+        $props = New-ModelsProps $v
+        return (ConvertTo-JsonObject $props $indent)
+    } catch { }
+    return (ConvertTo-JsonString ([string]$v))
+}
+
+function ConvertTo-JsonString([string]$s) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    foreach ($ch in $s.ToCharArray()) {
+        $c = [int]$ch
+        # An if/elseif chain, NOT `switch (...) { ... continue }`.
+        # `continue` inside a switch only skips to the end of THAT switch - it
+        # does not skip the rest of the foreach body. Written as a switch, every
+        # escaped character fell through to the code below and got a SECOND
+        # escape appended: `"` became `\""` (which closes the JSON string early)
+        # and `\` became `\\\`. Verified: a value containing a double quote or a
+        # backslash produced a models.json that ConvertFrom-Json refuses, so
+        # every save/hide/delete/repair threw models_serialize_failed and the
+        # file could not be written at all. Newlines gained one extra escape per
+        # save, which was silent.
+        if     ($c -eq 0x22) { [void]$sb.Append('\"') }
+        elseif ($c -eq 0x5C) { [void]$sb.Append('\\') }
+        elseif ($c -eq 0x08) { [void]$sb.Append('\b') }
+        elseif ($c -eq 0x0C) { [void]$sb.Append('\f') }
+        elseif ($c -eq 0x0A) { [void]$sb.Append('\n') }
+        elseif ($c -eq 0x0D) { [void]$sb.Append('\r') }
+        elseif ($c -eq 0x09) { [void]$sb.Append('\t') }
+        elseif ($c -lt 32)   { [void]$sb.Append('\u' + $c.ToString('x4')) }
+        else                 { [void]$sb.Append($ch) }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Save-ModelsSnapshot([string]$product, [string]$text) {
+    # One copy per write, pruned to the newest few. The client reloads this file
+    # on change, and a bad write means every custom model silently disappears,
+    # so a rollback point has to exist before the file is touched.
+    try {
+        $dir = Join-Path $DataDir 'models-snapshots'
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $stem = ($product -replace '[^A-Za-z0-9\-]', '_')
+        # Name by content hash, not by clock: several edits inside one second
+        # would otherwise collide and overwrite each other, so the state just
+        # before a given write could be lost.
+        $sha = [Security.Cryptography.SHA1]::Create()
+        $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text)))).Replace('-', '').Substring(0, 10)
+        $sha.Dispose()
+        $leaf = $stem + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $hash + '.json'
+        $target = Join-Path $dir $leaf
+        if (-not (Test-Path -LiteralPath $target)) {
+            [IO.File]::WriteAllText($target, $text, (New-Object System.Text.UTF8Encoding($false)))
+        }
+        # Keep the newest 20 for this edition, drop the rest.
+        $mine = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name.StartsWith($stem + '-') } |
+                  Sort-Object LastWriteTime -Descending)
+        if ($mine.Count -gt 20) {
+            foreach ($f in $mine[20..($mine.Count - 1)]) {
+                try { [IO.File]::Delete($f.FullName) } catch { }
+            }
+        }
+    } catch { }
+}
+
+function Write-ModelsText([string]$path, [string]$text) {
+    # Write to a sibling temp file, verify it parses, then swap it in. A crash
+    # or a full disk therefore leaves the original file intact instead of a
+    # half-written one - and a half-written one is exactly what makes the
+    # client drop every custom model without saying anything.
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($text)
+    $tmp = $path + '.keeper-tmp'
+    $bak = $path + '.keeper-bak'
+    $fs = $null
+    try {
+        $fs = [IO.File]::Open($tmp, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $fs.Write($bytes, 0, $bytes.Length)
+        $fs.Flush($true)
+        $fs.Close()
+        $fs = $null
+        # Re-read from disk and parse: proves what landed is valid JSON.
+        if (-not (ConvertFrom-ModelsText ([IO.File]::ReadAllText($tmp, [Text.Encoding]::UTF8))).ok) {
+            throw 'models_serialize_failed'
+        }
+        if (Test-Path -LiteralPath $path) {
+            # File.Replace wants a real backup path. Passing $null throws
+            # "the path is not of a legal form" on PowerShell 5.1.
+            [IO.File]::Replace($tmp, $path, $bak)
+        } else {
+            [IO.File]::Move($tmp, $path)
+        }
+    } finally {
+        if ($fs) { try { $fs.Close() } catch { } }
+        if (Test-Path -LiteralPath $tmp) { try { [IO.File]::Delete($tmp) } catch { } }
+        if (Test-Path -LiteralPath $bak) { try { [IO.File]::Delete($bak) } catch { } }
+    }
+}
+
+function Test-ReservedModelId([string]$id) {
+    # The group-title marker's id is reserved: it is bookkeeping the UI never
+    # shows, so no user-facing operation may create, edit or delete it.
+    return ([string]$id -eq $script:GroupMarkerId)
+}
+
+function Save-ModelEntry([string]$product, [string]$originalId, $patch, [bool]$create, [int]$hint = -1) {
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    if (-not $create -and (Test-ReservedModelId $originalId)) { throw 'model_not_found' }
+    $raw = Get-ModelsRaw $product
+    if ($raw.exists -and -not $raw.valid) { throw $raw.error }
+    if (-not $raw.exists) { throw 'models_missing' }
+
+    $arr = $raw.items
+
+    # Locate the entry being edited. Editing an entry that vanished (the user
+    # changed the file in the client meanwhile) fails loudly instead of
+    # appending a second copy under the same id. Lookup is by effective id, so
+    # both "foo" and "-foo" (hidden) are found by "foo".
+    #
+    # $hint is the card's array position and wins when still valid, so acting on
+    # a hidden duplicate touches that duplicate rather than its visible twin.
+    # See Find-ModelEntryIndex.
+    $idx = -1
+    if (-not $create) {
+        $idx = Find-ModelEntryIndex $arr $originalId $hint
+        if ($idx -lt 0) { throw 'model_not_found' }
+    }
+
+    # Start from the existing entry so unknown fields survive the edit.
+    $props = New-Object 'System.Collections.Specialized.OrderedDictionary'
+    if ($idx -ge 0) { $props = New-ModelsProps $arr[$idx] }
+
+    # Hiding is a change to the id itself, so it is handled before the generic
+    # field loop below. A patch that does not mention "hidden" must leave the
+    # entry exactly as it was: editing the name of a hidden entry should not
+    # quietly bring it back into the client's list.
+    $wantHidden = $false
+    if ($idx -ge 0) { $wantHidden = Test-ModelArchived $arr[$idx] }
+    if ($null -ne $patch.PSObject.Properties['hidden']) {
+        $wantHidden = [bool]$patch.hidden
+    }
+
+    foreach ($p in $patch.PSObject.Properties) {
+        $n = $p.Name
+        if ($n -eq 'fields' -or $n -eq 'duplicate' -or $n -eq 'raw') { continue }
+        if ($n -eq 'hidden' -or $n -eq 'rawId') { continue }
+        # The hidden spelling of the id is never a field to copy; the id is
+        # written back by Set-ModelHiddenKey.
+        if ($n -eq $script:HiddenIdKey) { continue }
+        if ($n.EndsWith('Set')) { continue }
+        if ($n -eq 'apiKeyState') { continue }
+        # supportedEfforts / defaultEffort belong INSIDE the reasoning object,
+        # which is rebuilt further down. Letting them through here also wrote
+        # them at the entry's top level, so every save added two stray keys that
+        # ConvertTo-ModelEntry never reads back (verified).
+        if ($n -eq 'supportedEfforts' -or $n -eq 'defaultEffort') { continue }
+        $v = $p.Value
+        # Whether an empty value drops the field or is kept as an empty string.
+        #
+        # url and apiKey are the fields the model needs to be usable at all, so
+        # they are kept in the file even when emptied: an empty value stays
+        # visible ("this row is not configured yet") instead of vanishing, and
+        # the viewer keeps rendering a text box for it. The client treats ""
+        # and missing the same way internally, so this changes nothing for the
+        # client - it only stops the field from silently disappearing.
+        #
+        # Everything else (description, vendor, reasoning, and the rest) is a
+        # real "remove this key" when emptied, because for those an empty string
+        # would be written into the file as a meaningless value.
+        $keepWhenEmpty = ($n -eq 'url' -or $n -eq 'apiKey')
+        if ($null -eq $v) {
+            if ($props.Contains($n)) { $props.Remove($n) }
+            continue
+        }
+        if ($v -is [string]) {
+            if ([string]$v -eq '') {
+                if ($keepWhenEmpty) { $props[$n] = ''; continue }
+                if ($n -ne 'name' -and $n -ne 'vendor') {
+                    if ($props.Contains($n)) { $props.Remove($n) }
+                    continue
+                }
+            }
+        } elseif ($v -is [System.Collections.IEnumerable]) {
+            # An emptied list means "drop the field".
+            if ((To-ItemArray $v).Count -eq 0) {
+                if ($props.Contains($n)) { $props.Remove($n) }
+                continue
+            }
+        }
+        # These three are numbers in models.json. A caller that hands them over
+        # as strings ("128000") would otherwise be written verbatim - quoted,
+        # which is a different JSON type from what the batch importer writes -
+        # and the file ends up mixing "128000" and 128000 for the same field.
+        # Coerce here rather than trusting every caller to get it right.
+        # InvariantCulture for the same reason ConvertTo-JsonValue uses it: on a
+        # comma-decimal locale "128.5" must not be read as 1285.
+        if ($n -eq 'maxInputTokens' -or $n -eq 'maxOutputTokens' -or $n -eq 'temperature') {
+            $num = 0.0
+            $ci = [Globalization.CultureInfo]::InvariantCulture
+            $sty = [Globalization.NumberStyles]::Float
+            if ([double]::TryParse(([string]$v), $sty, $ci, [ref]$num)) {
+                if ($n -eq 'temperature') { $v = [double]$num }
+                else { $v = [long][Math]::Round($num) }
+            }
+        }
+        $props[$n] = $v
+    }
+
+    # reasoning is rebuilt only when the editor actually touched it.
+    if ($null -ne $patch.PSObject.Properties['defaultEffort'] -or
+        $null -ne $patch.PSObject.Properties['supportedEfforts'] -or
+        $null -ne $patch.PSObject.Properties['canDisableThinking']) {
+        # Do NOT pipe To-ItemArray's result. It returns a comma-wrapped array to
+        # survive the pipeline unrolling of the *function* return, so piping it
+        # hands the whole array over as ONE object: Where-Object then sees a
+        # string[] and ([string]$_) flattens it to "low high max", writing a
+        # single bogus effort instead of the three real ones. That is exactly the
+        # bug where a multi-select came back as only the default level.
+        $efforts = New-Object System.Collections.Generic.List[string]
+        foreach ($ev in (To-ItemArray $patch.supportedEfforts)) {
+            $s = ([string]$ev).Trim()
+            if ($s) { $efforts.Add($s) }
+        }
+        $def = [string]$patch.defaultEffort
+        # canDisableThinking=false is the editor's "off (no thinking)" option,
+        # which is not one of the effort levels: it lives inside the reasoning
+        # object rather than in supportedEfforts.
+        #
+        # The editor deliberately does NOT send this field ("the value already in
+        # the file stays", per the UI and the docs). So when the patch is silent
+        # the EXISTING value has to be carried over - this block rebuilds the
+        # whole reasoning object and replaces the old one, so anything not put
+        # back here is lost. Without the else-branch below, a stored
+        # canDisableThinking=false was silently deleted on every save, and the
+        # client then let the user turn thinking off for a model where it must
+        # not be turned off.
+        $canDis = $true
+        $canDisSet = $false
+        if ($null -ne $patch.PSObject.Properties['canDisableThinking']) {
+            $canDis = [bool]$patch.canDisableThinking
+            $canDisSet = $true
+        } elseif ($props.Contains('reasoning') -and $null -ne $props['reasoning']) {
+            $old = Get-ModelProp $props['reasoning'] 'canDisableThinking'
+            if ($null -ne $old) {
+                $canDis = [bool]$old
+                $canDisSet = $true
+            }
+        }
+        if ($efforts.Count -gt 0 -or $def -or ($canDisSet -and -not $canDis)) {
+            $r = New-Object 'System.Collections.Specialized.OrderedDictionary'
+            if ($def) { $r['defaultEffort'] = $def }
+            if ($efforts.Count -gt 0) { $r['supportedEfforts'] = @($efforts) }
+            if ($canDisSet -and -not $canDis) { $r['canDisableThinking'] = $false }
+            if ($props.Contains('reasoning')) { $props.Remove('reasoning') }
+            $props['reasoning'] = $r
+        } else {
+            if ($props.Contains('reasoning')) { $props.Remove('reasoning') }
+        }
+    }
+
+    # The id, from whichever key currently holds it. A patch that omits id keeps
+    # the one the entry already had.
+    $newId = ''
+    try { $newId = (Get-ModelKey $props).Trim() } catch { $newId = '' }
+    if (-not $newId -and $props.Contains('id')) { $newId = ([string]$props['id']).Trim() }
+    $newId = $newId.TrimStart('-')
+    if (-not $newId) { throw 'model_id_required' }
+    # No character-set rule here on purpose. The client accepts any non-empty id
+    # (real ones look like "glm-5.2" or "qwen3.8-max"), so narrowing the charset
+    # would reject valid ids while doing nothing about a short one like "33" -
+    # that is a typo, not an illegal character, and only the user can tell.
+    #
+    # A same-id entry is NOT rejected any more: importing a model that is
+    # already there is a normal thing to do, and the client resolves a model by
+    # its id alone. The invariant this program maintains is "at most one
+    # VISIBLE entry per id" - see the sibling pass below, which hides any other
+    # same-id entry whenever the saved one is visible. That makes the result
+    # unambiguous without depending on which end of the list the client reads.
+
+    # Finally put the id back under the right key. Hiding swaps "id" for "-id";
+    # that missing "id" key is the whole mechanism (see Get-ModelKey).
+    $props = Set-ModelHiddenKey $props $wantHidden $newId
+    $storedId = $newId
+
+    $list = New-Object System.Collections.Generic.List[object]
+    if ($idx -ge 0) {
+        for ($i = 0; $i -lt $arr.Count; $i++) {
+            if ($i -eq $idx) { $list.Add($props) } elseif ($null -ne $arr[$i]) { $list.Add((New-ModelsProps $arr[$i])) }
+        }
+    } else {
+        foreach ($m in $arr) { if ($null -ne $m) { $list.Add((New-ModelsProps $m)) } }
+        $list.Add($props)
+    }
+
+    # Enforce "at most one visible entry per id". The entry just saved keeps the
+    # visible slot; every other same-id entry that is still visible gets hidden
+    # (id -> "-id"), which leaves all of its fields intact and is reversible
+    # from the model list. Done in place on $list so nothing else changes.
+    $hiddenSiblings = New-Object System.Collections.Generic.List[string]
+    if (-not $wantHidden) {
+        $savedPos = $(if ($idx -ge 0) { $idx } else { $list.Count - 1 })
+        for ($i = 0; $i -lt $list.Count; $i++) {
+            if ($i -eq $savedPos) { continue }
+            $e = $list[$i]
+            if ($null -eq $e) { continue }
+            if ((Get-ModelKey $e) -ne $newId) { continue }
+            if (Test-ModelArchived $e) { continue }
+            $list[$i] = Set-ModelHiddenKey $e $true $newId
+            $hiddenSiblings.Add($newId)
+        }
+    }
+
+    $text = ConvertTo-ModelsDocument $list $raw.shape $raw.wrapper
+    if (-not (ConvertFrom-ModelsText $text).ok) { throw 'models_serialize_failed' }
+    Save-ModelsSnapshot $product $raw.text
+    Write-ModelsText $raw.path $text
+    Write-Log ("models saved: {0} id={1} stored={2} create={3} hidSiblings={4}" -f `
+               $product, $newId, $storedId, $create, $hiddenSiblings.Count)
+
+    $after = Get-ModelsList $product
+    return [pscustomobject]@{
+        ok             = $true
+        product        = $product
+        id             = $newId
+        storedId       = $storedId
+        hidden         = [bool]$wantHidden
+        hiddenSiblings = $hiddenSiblings.ToArray()
+        count          = $after.count
+        models         = $after.models
+        path           = $after.path
+    }
+}
+
+function Repair-ModelDuplicates([string]$product) {
+    # Enforce the invariant the client itself relies on: for any id, exactly one
+    # entry may be VISIBLE. The client resolves a model by id alone, so when two
+    # visible entries share an id they collide.
+    #
+    # Which one survives? The LAST visible one, per an end-to-end experiment
+    # against the real workbuddy binary (10 same-id entries -> only the 10th
+    # showed up in /v1/models). Note this contradicts a plain reading of
+    # `Array.find` in model-resolver (first match); the merge path
+    # (mergeModelsById builds a Map with i.set) is what decides in practice, and
+    # the experiment is the authority. Keep LAST; do not "fix" this by reading
+    # find() alone.
+    #
+    # Hidden means: the "id" key is renamed to "-id". The client validates
+    # entries with isValidLocalCustomModel, which requires `typeof e.id ===
+    # 'string' && e.id.trim() !== ''`, so a renamed entry is dropped from the
+    # list entirely - while all of its fields stay in the file and can be
+    # restored later. Nothing is deleted.
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    $raw = Get-ModelsRaw $product
+    if (-not $raw.exists) { throw 'models_missing' }
+    if (-not $raw.valid) { throw $raw.error }
+
+    $arr = $raw.items
+    # Last visible index per id. A hidden entry does not compete: it is already
+    # out of the client's list, so it must not shadow a visible one.
+    $lastVisible = @{}
+    for ($i = 0; $i -lt $arr.Count; $i++) {
+        $e = $arr[$i]
+        if ($null -eq $e) { continue }
+        if (Test-ModelArchived $e) { continue }
+        $k = (Get-ModelKey $e)
+        if (-not $k) { continue }
+        $lastVisible[$k] = $i
+    }
+
+    $list = New-Object System.Collections.Generic.List[object]
+    $hidden = New-Object System.Collections.Generic.List[string]
+    $hiddenIds = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $arr.Count; $i++) {
+        $e = $arr[$i]
+        if ($null -eq $e) { continue }
+        $props = New-ModelsProps $e
+        if (-not (Test-ModelArchived $e)) {
+            $k = (Get-ModelKey $e)
+            if ($k -and $lastVisible.ContainsKey($k) -and $lastVisible[$k] -ne $i) {
+                # An earlier twin of a later visible entry: hide this one.
+                $props = Set-ModelHiddenKey $props $true $k
+                $hidden.Add($k)
+                $hiddenIds.Add([pscustomobject]@{ id = $k; name = [string](Get-ModelProp $e 'name') })
+            }
+        }
+        $list.Add($props)
+    }
+
+    if ($hidden.Count -eq 0) {
+        return [pscustomobject]@{
+            ok      = $true
+            product = $product
+            changed = $false
+            hidden  = @()
+            details = @()
+            count   = (Get-ModelsList $product).count
+        }
+    }
+
+    $text = ConvertTo-ModelsDocument $list $raw.shape $raw.wrapper
+    if (-not (ConvertFrom-ModelsText $text).ok) { throw 'models_serialize_failed' }
+    Save-ModelsSnapshot $product $raw.text
+    Write-ModelsText $raw.path $text
+    Write-Log ("models repaired: {0} hid={1}" -f $product, $hidden.Count)
+
+    $after = Get-ModelsList $product
+    return [pscustomobject]@{
+        ok      = $true
+        product = $product
+        changed = $true
+        hidden  = $hidden.ToArray()
+        details = $hiddenIds.ToArray()
+        count   = $after.count
+        models  = $after.models
+    }
+}
+
+function Remove-ModelEntry([string]$product, [string]$id, [int]$hint = -1) {
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    if (-not $id) { throw 'model_id_required' }
+    # The group-title marker is not a model; deleting it would drop the group's
+    # title. Report it the same way as any other unknown id.
+    if (Test-ReservedModelId $id) { throw 'model_not_found' }
+    $raw = Get-ModelsRaw $product
+    if (-not $raw.exists) { throw 'models_missing' }
+    if (-not $raw.valid) { throw $raw.error }
+
+    $arr = $raw.items
+    # Delete works by effective id so a hidden entry can be removed without
+    # unhiding it first. $hint carries the card's array position, which is what
+    # makes deleting a HIDDEN card remove that hidden entry - with an id-only
+    # lookup the visible twin always won, so pressing delete on the hidden card
+    # deleted the model the user was actually using (verified).
+    $idx = Find-ModelEntryIndex $arr $id $hint
+    if ($idx -lt 0) { throw 'model_not_found' }
+
+    $list = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $arr.Count; $i++) {
+        if ($i -eq $idx) { continue }
+        if ($null -eq $arr[$i]) { continue }
+        $list.Add((New-ModelsProps $arr[$i]))
+    }
+
+    $text = ConvertTo-ModelsDocument $list $raw.shape $raw.wrapper
+    if (-not (ConvertFrom-ModelsText $text).ok) { throw 'models_serialize_failed' }
+    Save-ModelsSnapshot $product $raw.text
+    Write-ModelsText $raw.path $text
+    Write-Log ("models deleted: {0} id={1}" -f $product, $id)
+
+    $after = Get-ModelsList $product
+    return [pscustomobject]@{
+        ok      = $true
+        product = $product
+        id      = $id
+        count   = $after.count
+        models  = $after.models
+        path    = $after.path
+    }
+}
+
+# --------------------------------------------------------------------------
+# model.csv - capability defaults for models the listing does not describe
+#
+# Lives in the program directory (next to app.ps1), NOT in the edition home:
+# it describes how this tool should import models, so it belongs with the tool
+# and is shared by both editions.
+#
+# Columns (the header names are matched loosely - see Get-ModelCsvAliases):
+#
+#   id,<supportsToolCall>,<supportsImages>,<supportsReasoning>,
+#      <supportedEfforts>,<defaultEffort>,<contextLength>,<hidden>,<icon>
+#
+# The shipped template writes those headers in Chinese; the loader accepts the
+# Chinese names, the English property names, and a few obvious shorthands, so a
+# hand-edited file is hard to get wrong. See Get-ModelCsvHeaderMap.
+#
+# id may contain "*" as a wildcard. Lookup order for a given model id is:
+#   1. exact id match
+#  2. first wildcard match, in file order
+#   3. built-in defaults
+# The listing's own values always win where it actually reported something.
+# --------------------------------------------------------------------------
+
+$script:ModelCsvNames = @{
+    Tool   = 'supportsToolCall'
+    Images = 'supportsImages'
+    Think  = 'supportsReasoning'
+    Effort = 'supportedEfforts'
+    Default = 'defaultEffort'
+    Ctx    = 'maxInputTokens'
+    Hidden = 'hidden'
+}
+
+function Get-ModelCsvPath() {
+    return (Join-Path $ScriptDir 'model.csv')
+}
+
+function Get-ModelCsvHeaderMap($header) {
+    # Maps a header cell to one canonical column key, or '' to ignore it.
+    # Matched on a normalised form so the Chinese header, "supports_tool_call"
+    # and "SupportsToolCall" all land on the same column - the file is meant to
+    # be hand-edited, so being strict about spelling would only cause silent
+    # misreads.
+    #
+    # Chinese spellings are built from code points because this file must stay
+    # pure ASCII (it is read by PowerShell 5.1, which may treat a no-BOM file as
+    # ANSI and mangle literal non-ASCII bytes).
+    $cId     = [string]([char]0x6A21 + [char]0x578B + [char]0x69) + [char]0x64
+    $cTool   = [string]([char]0x652F + [char]0x6301 + [char]0x5DE5 + [char]0x5177)
+    $cToolS  = [string]([char]0x5DE5 + [char]0x5177)
+    $cImg    = [string]([char]0x652F + [char]0x6301 + [char]0x56FE + [char]0x7247)
+    $cImgS   = [string]([char]0x56FE + [char]0x7247)
+    $cThink  = [string]([char]0x652F + [char]0x6301 + [char]0x601D + [char]0x8003)
+    $cReas   = [string]([char]0x652F + [char]0x6301 + [char]0x63A8 + [char]0x7406)
+    $cThinkS = [string]([char]0x601D + [char]0x8003)
+    $cEff    = [string]([char]0x63A8 + [char]0x7406 + [char]0x6863 + [char]0x4F4D)
+    $cEffS   = [string]([char]0x6863 + [char]0x4F4D)
+    $cDef    = [string]([char]0x9ED8 + [char]0x8BA4 + [char]0x6863 + [char]0x4F4D)
+    $cCtx    = [string]([char]0x4E0A + [char]0x4E0B + [char]0x6587 + [char]0x957F + [char]0x5EA6)
+    $cCtxS   = [string]([char]0x4E0A + [char]0x4E0B + [char]0x6587)
+    $cHid    = [string]([char]0x9690 + [char]0x85CF)
+    $cHidS   = [string]([char]0x9690 + [char]0x85CF + [char]0x6A21 + [char]0x578B)
+    # "tubiao" - the icon column added in v1.6.7
+    $cIcon   = [string]([char]0x56FE + [char]0x6807)
+
+    $map = @{}
+    for ($i = 0; $i -lt $header.Count; $i++) {
+        $h = ([string]$header[$i]).Trim().ToLowerInvariant()
+        $h = $h -replace '[\s_\-]', ''
+        $key = ''
+        if     ($h -eq 'id' -or $h -eq $cId) { $key = 'id' }
+        elseif ($h -eq $cTool -or $h -eq $cToolS -or $h -eq 'supportstoolcall' -or $h -eq 'tool') { $key = 'Tool' }
+        elseif ($h -eq $cImg -or $h -eq $cImgS -or $h -eq 'supportsimages' -or $h -eq 'image' -or $h -eq 'images') { $key = 'Images' }
+        elseif ($h -eq $cThink -or $h -eq $cReas -or $h -eq $cThinkS -or $h -eq 'supportsreasoning' -or $h -eq 'reason') { $key = 'Think' }
+        elseif ($h -eq $cEff -or $h -eq $cEffS -or $h -eq 'supportedefforts' -or $h -eq 'effort' -or $h -eq 'efforts') { $key = 'Effort' }
+        elseif ($h -eq $cDef -or $h -eq 'defaulteffort') { $key = 'Default' }
+        elseif ($h -eq $cCtx -or $h -eq $cCtxS -or $h -eq 'context' -or $h -eq 'contextlength' -or $h -eq 'maxinputtokens') { $key = 'Ctx' }
+        elseif ($h -eq $cHid -or $h -eq $cHidS -or $h -eq 'hidden') { $key = 'Hidden' }
+        elseif ($h -eq $cIcon -or $h -eq 'icon' -or $h -eq 'vendor') { $key = 'Icon' }
+        if ($key) { $map[$i] = $key }
+    }
+    return $map
+}
+
+function Import-ModelCsv() {
+    # Returns @{ ok; rows; error } where a row is a hashtable of the canonical
+    # keys plus 'pattern'. A missing file is not an error: the feature is
+    # optional and the defaults apply.
+    $out = [pscustomobject]@{ ok = $true; rows = @(); error = ''; path = (Get-ModelCsvPath) }
+    $p = $out.path
+    if (-not (Test-Path -LiteralPath $p)) { return $out }
+    $text = ''
+    try { $text = [IO.File]::ReadAllText($p, [Text.Encoding]::UTF8) }
+    catch { $out.ok = $false; $out.error = 'csv_unreadable'; return $out }
+    if (-not $text.Trim()) { return $out }
+
+    $lines = $text -split "\r?\n"
+    $rows = New-Object System.Collections.Generic.List[object]
+    $map = $null
+    $width = 0
+    foreach ($line in $lines) {
+        if ($null -eq $line) { continue }
+        $t = $line.Trim()
+        if (-not $t) { continue }
+        # A leading # makes the line a comment, so the shipped template can
+        # explain itself without its explanation being parsed as data.
+        if ($t.StartsWith('#')) { continue }
+        $cells = @(Split-CsvLine $line)
+        if ($null -eq $map) {
+            $map = Get-ModelCsvHeaderMap $cells
+            if (-not $map.ContainsKey(0) -and (([string]$cells[0]).Trim().ToLowerInvariant() -ne 'id')) {
+                # No usable header: treat the file as bodiless rather than
+                # guessing column order, which would silently fill wrong fields.
+                $out.ok = $false; $out.error = 'csv_no_id_column'; return $out
+            }
+            $map[0] = 'id'
+            $width = $cells.Count
+            continue
+        }
+        $row = @{}
+        foreach ($k in $map.Keys) {
+            if ($k -lt $cells.Count) { $row[$map[$k]] = ([string]$cells[$k]).Trim() }
+        }
+        $pat = [string]$row['id']
+        if (-not $pat) { continue }
+        $row['pattern'] = $pat
+        $rows.Add($row)
+    }
+    $out.rows = $rows.ToArray()
+    return $out
+}
+
+function Split-CsvLine([string]$line) {
+    # Minimal RFC4180-ish splitter: enough for hand-written config, and it
+    # understands "" inside a quoted cell so a value may contain a comma.
+    $cells = New-Object System.Collections.Generic.List[string]
+    $sb = New-Object System.Text.StringBuilder
+    $inQ = $false
+    for ($i = 0; $i -lt $line.Length; $i++) {
+        $ch = $line[$i]
+        if ($inQ) {
+            if ($ch -eq '"') {
+                if (($i + 1) -lt $line.Length -and $line[$i + 1] -eq '"') { [void]$sb.Append('"'); $i++ }
+                else { $inQ = $false }
+            } else { [void]$sb.Append($ch) }
+        } else {
+            if ($ch -eq '"') { $inQ = $true }
+            elseif ($ch -eq ',') { $cells.Add($sb.ToString()); [void]$sb.Clear() }
+            else { [void]$sb.Append($ch) }
+        }
+    }
+    $cells.Add($sb.ToString())
+    # Plain array out; callers use @(...) - see Get-ModelProbeUrlCandidates.
+    return $cells.ToArray()
+}
+
+function Find-ModelCsvRow($rows, [string]$id) {
+    # Exact match first, then the first wildcard pattern that matches, in file
+    # order. Exact-before-wildcard is the whole point: a specific override has
+    # to beat a broad "*" catch-all no matter where it sits in the file.
+    if (-not $id) { return $null }
+    foreach ($r in $rows) {
+        $pat = [string]$r['pattern']
+        if (-not $pat) { continue }
+        if ($pat.IndexOf('*') -lt 0) {
+            if ($pat -eq $id) { return $r }
+        }
+    }
+    foreach ($r in $rows) {
+        $pat = [string]$r['pattern']
+        if (-not $pat -or $pat.IndexOf('*') -lt 0) { continue }
+        if (Test-ModelCsvGlob $pat $id) { return $r }
+    }
+    # A model id that itself contains "*" is unusual but legal; fall back to a
+    # literal comparison against the patterns that had no wildcard.
+    return $null
+}
+
+function Test-ModelCsvGlob([string]$pattern, [string]$id) {
+    if (-not $pattern) { return $false }
+    if ($pattern.IndexOf('*') -lt 0) { return ($pattern -eq $id) }
+    # Escape everything, then let "*" through as the only wildcard. Anchored so
+    # "abc*" does not match "xabc".
+    $rx = [regex]::Escape($pattern).Replace('\*', '.*')
+    return ([regex]::IsMatch($id, '^' + $rx + '$', [Text.RegularExpressions.RegexOptions]::IgnoreCase))
+}
+
+function ConvertTo-CsvBool([string]$v, [bool]$fallback) {
+    # Accepts the obvious spellings in both languages. Built from code points
+    # where Chinese, to keep this file pure ASCII.
+    if ($null -eq $v) { return $fallback }
+    $s = ([string]$v).Trim().ToLowerInvariant()
+    if (-not $s) { return $fallback }
+    $yes1 = [string]([char]0x662F)                                    # yes
+    $yes2 = [string]([char]0x652F + [char]0x6301)                      # support
+    $yes3 = [string]([char]0x5F00)                                     # on
+    $yes4 = [string]([char]0x5F00 + [char]0x542F)                      # enabled
+    $no1  = [string]([char]0x5426)                                     # no
+    $no2  = [string]([char]0x4E0D + [char]0x652F + [char]0x6301)       # unsupported
+    $no3  = [string]([char]0x5173)                                     # off
+    $no4  = [string]([char]0x5173 + [char]0x95ED)                      # closed/off
+    if ($s -in @('1', 'true', 'yes', 'y', 'on', $yes1, $yes2, $yes3, $yes4)) { return $true }
+    if ($s -in @('0', 'false', 'no', 'n', 'off', $no1, $no2, $no3, $no4)) { return $false }
+    return $fallback
+}
+
+function ConvertTo-CsvEfforts([string]$v) {
+    # "high|max", "high,max" and the Chinese labels all map to the client's
+    # enum. Unknown names are dropped rather than written through, because an
+    # effort the client does not know would make the model look broken in its
+    # picker.
+    $out = New-Object System.Collections.Generic.List[string]
+    if (-not $v) { return $out.ToArray() }
+    $zhLow   = [string]([char]0x4F4E)
+    $zhMid   = [string]([char]0x4E2D)
+    $zhHigh  = [string]([char]0x9AD8)
+    $zhXHigh = [string]([char]0x8D85 + [char]0x9AD8)
+    $zhMax   = [string]([char]0x6781 + [char]0x81F4)
+    $known = @{}
+    $known[$zhLow] = 'low'; $known['low'] = 'low'
+    $known[$zhMid] = 'medium'; $known['medium'] = 'medium'
+    $known[$zhHigh] = 'high'; $known['high'] = 'high'
+    $known[$zhXHigh] = 'xhigh'; $known['xhigh'] = 'xhigh'
+    $known[$zhMax] = 'max'; $known['max'] = 'max'
+    $sep = '[|,' + [char]0xFF0C + ';' + [char]0xFF1B + '/\s]+'
+    foreach ($part in ($v -split $sep)) {
+        $s = $part.Trim()
+        if (-not $s) { continue }
+        if ($known.ContainsKey($s)) { $out.Add([string]$known[$s]); continue }
+        $lc = $s.ToLowerInvariant()
+        if ($known.ContainsKey($lc)) { $out.Add([string]$known[$lc]) }
+    }
+    # Plain array out; callers use @(...).
+    return $out.ToArray()
+}
+
+function ConvertTo-CsvEffortOne([string]$v) {
+    $a = @(ConvertTo-CsvEfforts $v)
+    if ($a.Count -gt 0) { return [string]$a[0] }
+    return ''
+}
+
+function ConvertTo-CsvTokens([string]$v) {
+    # Accepts a plain count or a K-suffixed value ("1048k" / "1048K" / "1048576").
+    if (-not $v) { return 0 }
+    $s = ([string]$v).Trim().ToLowerInvariant()
+    if (-not $s) { return 0 }
+    $mult = 1
+    if ($s.EndsWith('k')) { $mult = 1000; $s = $s.Substring(0, $s.Length - 1).Trim() }
+    elseif ($s.EndsWith('m')) { $mult = 1000000; $s = $s.Substring(0, $s.Length - 1).Trim() }
+    $n = 0.0
+    if (-not [double]::TryParse($s, [ref]$n)) { return 0 }
+    if ($n -le 0) { return 0 }
+    return [long][Math]::Round($n * $mult)
+}
+
+function Get-ModelCsvDefaults() {
+    # What applies when neither the listing nor model.csv said anything.
+    return [pscustomobject]@{
+        supportsToolCall  = $true
+        supportsImages    = $false
+        supportsReasoning = $true
+        supportedEfforts  = @('high', 'max')
+        defaultEffort     = 'high'
+        maxInputTokens    = 0
+        maxOutputTokens   = 0
+        hidden            = $false
+    }
+}
+
+
+# --------------------------------------------------------------------------
+# models.json groups ("model file" tabs)
+#
+# The client only ever reads one file: <edition home>\models.json. Switching
+# between model sets therefore works by RENAMING files on disk, never by
+# rewriting which path the client looks at (there is no such setting):
+#
+#   models.json              <- the active group, the only one the client reads
+#   models<TITLE>.json       <- every other group, parked until selected
+#   models2.json             <- a group whose name is just the number 2
+#
+# The title goes BEFORE the extension on purpose. Appending it after ".json"
+# (models.json<TITLE>) changes the extension, so the parked files stop looking
+# like JSON at all - Explorer stops previewing them, editors stop offering JSON
+# syntax highlighting, and any tool that globs *.json silently misses them.
+# --------------------------------------------------------------------------
+# A group's TITLE has to survive the rename, so it is stored INSIDE the file as
+# a hidden marker entry sitting at the top of the model list:
+#
+#   { "-id": "ModelFileName", "name": "<title>", "url": "...", "apiKey": "..." }
+#
+# "-id" (not "id") makes the client drop it silently, exactly like a hidden
+# model, so it is invisible in the client while staying in the file. The id
+# value is a fixed sentinel so the marker is recognisable after any rename.
+# --------------------------------------------------------------------------
+$script:GroupMarkerId = 'ModelFileName'
+# "untitled" - spelled in code points because this file must stay pure ASCII.
+$script:UntitledZh = [string]([char]0x65E0 + [char]0x6807 + [char]0x9898)
+
+function Test-GroupMarker($entry) {
+    if ($null -eq $entry) { return $false }
+    if (-not (Test-ModelArchived $entry)) { return $false }
+    return ((Get-ModelKey $entry) -eq $script:GroupMarkerId)
+}
+
+function New-GroupMarkerProps([string]$title) {
+    $d = New-Object 'System.Collections.Specialized.OrderedDictionary'
+    $d[$script:HiddenIdKey] = $script:GroupMarkerId
+    $d['name'] = [string]$title
+    # Sample values, not empty ones: the marker is meant to be a real entry so
+    # the client's own validation never has a reason to look twice at it.
+    $d['url'] = 'https://example.com/v1/chat/completions'
+    $d['apiKey'] = 'sk-...'
+    return $d
+}
+
+function Test-GroupFile([string]$name) {
+    # A parked group is "models<TITLE>.json"; the active one is plain
+    # "models.json". Both must match, and our own atomic-write leftovers
+    # (models.json.keeper-tmp / .keeper-bak) must not.
+    if (-not $name) { return $false }
+    if ($name -eq 'models.json') { return $true }
+    if (-not $name.StartsWith('models')) { return $false }
+    if (-not $name.EndsWith('.json')) { return $false }
+    if ($name.EndsWith('.keeper-tmp')) { return $false }
+    if ($name.EndsWith('.keeper-bak')) { return $false }
+    # "models" + something + ".json"; the middle part is the title.
+    if ($name.Length -le ('models'.Length + '.json'.Length)) { return $false }
+    return $true
+}
+
+function Get-GroupSuffix([string]$file) {
+    # The title carried by the FILE NAME, or '' when there is none.
+    if (-not $file) { return '' }
+    if ($file -eq 'models.json') { return '' }
+    if (-not (Test-GroupFile $file)) { return '' }
+    $mid = $file.Substring('models'.Length)
+    $mid = $mid.Substring(0, $mid.Length - '.json'.Length)
+    return $mid
+}
+
+function Get-GroupFileName([string]$title) {
+    # models.json for no title; "models<title>.json" otherwise. The title goes
+    # BEFORE the extension so the parked file keeps looking like JSON.
+    if (-not $title) { return 'models.json' }
+    return ('models' + $title + '.json')
+}
+
+function Get-SafeGroupTitle([string]$title, [string]$fallback) {
+    # A title doubles as a file name, so it has to obey Windows' rules: no
+    # path separators, no <>:"/\|?*, no control characters, no trailing dot or
+    # space (which Windows silently strips, producing a name nobody typed).
+    $t = [string]$title
+    if ($null -eq $t) { $t = '' }
+    $t = [regex]::Replace($t, '[\x00-\x1f<>:"/\\|?*]', '')
+    $t = $t.Trim().TrimEnd('.').Trim()
+    if ($t.Length -gt 60) { $t = $t.Substring(0, 60).Trim() }
+    if (-not $t) { $t = $fallback }
+    if (-not $t) { $t = 'untitled' }
+    return $t
+}
+
+function Get-GroupTitleFromFile([string]$path, [string]$file) {
+    # Embedded title wins; otherwise the name after "models.json" is the title;
+    # otherwise the file is untitled.
+    try {
+        if (Test-Path -LiteralPath $path) {
+            $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+            $parsed = ConvertFrom-ModelsText $text
+            if ($parsed.ok) {
+                foreach ($e in $parsed.items) {
+                    if ($null -eq $e) { continue }
+                    if (Test-GroupMarker $e) {
+                        $t = ([string](Get-ModelProp $e 'name')).Trim()
+                        if ($t) { return $t }
+                        break
+                    }
+                }
+            }
+        }
+    } catch { }
+    $s = Get-GroupSuffix $file
+    if ($s) { return $s }
+    return $script:UntitledZh
+}
+
+function Get-UniqueGroupPath([string]$dir, [string]$suffix) {
+    # models<title>.json, then <title>2, <title>3 ... until one is free.
+    # A title-less group has no parked file at all (it IS models.json), so the
+    # caller never asks for one; the fallback name below just keeps the loop
+    # from producing a bare "models.json" collision.
+    if (-not $suffix) { $suffix = $script:UntitledZh }
+    $p = Join-Path $dir (Get-GroupFileName $suffix)
+    if (-not (Test-Path -LiteralPath $p)) { return $p }
+    for ($i = 2; $i -le 999; $i++) {
+        $p = Join-Path $dir (Get-GroupFileName ($suffix + [string]$i))
+        if (-not (Test-Path -LiteralPath $p)) { return $p }
+    }
+    throw 'too_many_groups'
+}
+
+function Set-GroupMarkerInFile([string]$product, [string]$path, [string]$title) {
+    # Rewrite one group file with its title marker sitting at the very top of
+    # the model list, replacing any marker that was there before.
+    $parsed = $null
+    $oldText = ''
+    if (Test-Path -LiteralPath $path) {
+        $oldText = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+        $parsed = ConvertFrom-ModelsText $oldText
+    }
+    if ($null -eq $parsed) { $parsed = ConvertFrom-ModelsText '[]' }
+    if (-not $parsed.ok) { throw 'models_malformed' }
+
+    $list = New-Object System.Collections.Generic.List[object]
+    $list.Add((New-GroupMarkerProps $title))
+    foreach ($e in $parsed.items) {
+        if ($null -eq $e) { continue }
+        if (Test-GroupMarker $e) { continue }
+        $list.Add((New-ModelsProps $e))
+    }
+    if ($parsed.shape -eq 'none') { $parsed.shape = 'array' }
+    $doc = ConvertTo-ModelsDocument $list $parsed.shape $parsed.wrapper
+    if (-not (ConvertFrom-ModelsText $doc).ok) { throw 'models_serialize_failed' }
+    if ($oldText) { Save-ModelsSnapshot $product $oldText }
+    Write-ModelsText $path $doc
+}
+
+function Get-ModelGroups([string]$product) {
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    $dir = Get-EditionHome $product
+    $out = New-Object System.Collections.Generic.List[object]
+    if (-not (Test-Path -LiteralPath $dir)) { return ,$out.ToArray() }
+    $files = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+               Where-Object { Test-GroupFile $_.Name } |
+               Sort-Object Name)
+    foreach ($f in $files) {
+        $n = $f.Name
+        $item = [pscustomobject]@{
+            file = $n
+            path = $f.FullName
+            active = ($n -eq 'models.json')
+            title = ''
+            loadable = $false
+            count = 0
+            error = ''
+        }
+        try { $text = [IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8) }
+        catch { $item.error = 'read_failed'; $out.Add($item); continue }
+        if (-not $text.Trim()) { $item.error = 'models_empty'; $out.Add($item); continue }
+        $parsed = ConvertFrom-ModelsText $text
+        if (-not $parsed.ok) { $item.error = 'models_malformed'; $out.Add($item); continue }
+        $item.loadable = $true
+        $title = ''
+        $cnt = 0
+        foreach ($e in $parsed.items) {
+            if ($null -eq $e) { continue }
+            if (-not ($e -is [psobject]) -or $e -is [string] -or $e -is [ValueType]) { continue }
+            if (Test-GroupMarker $e) {
+                if (-not $title) { $title = ([string](Get-ModelProp $e 'name')).Trim() }
+                continue
+            }
+            $cnt++
+        }
+        $item.count = $cnt
+        if (-not $title) { $title = Get-GroupSuffix $n }
+        if (-not $title) { $title = $script:UntitledZh }
+        $item.title = $title
+        $out.Add($item)
+    }
+    return ,$out.ToArray()
+}
+
+function Switch-ModelGroup([string]$product, [string]$file) {
+    # Park the current models.json under its own title, then promote the chosen
+    # file into its place. The title never lives in the file name alone, which
+    # is why it is embedded before the rename can drop it.
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    $dir = Get-EditionHome $product
+    if (-not $file) { throw 'group_required' }
+    if ($file -ne [IO.Path]::GetFileName($file)) { throw 'bad_group_name' }
+    if (-not (Test-GroupFile $file)) { throw 'bad_group_name' }
+    $activePath = Join-Path $dir 'models.json'
+    $targetPath = Join-Path $dir $file
+
+    if ($file -eq 'models.json') {
+        # Already active. Still guarantee the marker exists so the title shows.
+        $t = Get-GroupTitleFromFile $activePath $file
+        Set-GroupMarkerInFile $product $activePath $t
+        return [pscustomobject]@{ ok = $true; file = 'models.json'; title = $t; parked = '' }
+    }
+    if (-not (Test-Path -LiteralPath $targetPath)) { throw 'group_not_found' }
+
+    # Parse the target BEFORE any file is moved. Set-GroupMarkerInFile validates
+    # only after the swap, so a malformed target used to end up installed as
+    # models.json - the client then read an invalid file and dropped every
+    # custom model, and the user had to switch back by hand to recover. Checking
+    # first turns that into a plain error with nothing changed on disk.
+    $preText = ''
+    try { $preText = [IO.File]::ReadAllText($targetPath, [Text.Encoding]::UTF8) }
+    catch { throw 'group_not_found' }
+    if (-not $preText.Trim()) { throw 'models_empty' }
+    if (-not (ConvertFrom-ModelsText $preText).ok) { throw 'models_malformed' }
+
+    $outTitle = Get-GroupTitleFromFile $activePath 'models.json'
+    $safeOut = Get-SafeGroupTitle $outTitle $script:UntitledZh
+    $inTitle = Get-GroupTitleFromFile $targetPath $file
+
+    $parked = ''
+    if (Test-Path -LiteralPath $activePath) {
+        $dest = Get-UniqueGroupPath $dir $safeOut
+        [IO.File]::Move($activePath, $dest)
+        $parked = [IO.Path]::GetFileName($dest)
+    }
+    [IO.File]::Move($targetPath, $activePath)
+    Set-GroupMarkerInFile $product $activePath $inTitle
+    Write-Log ("models group switch: {0} -> [{1}] title={2} parked={3}" -f `
+               $product, $file, $inTitle, $parked)
+    # Returns a scalar on purpose: this function used to hand back the group
+    # array, which a one-element array does not survive (PowerShell unwraps a
+    # single-element array returned from a function). The caller re-reads the
+    # list with Get-ModelGroups instead, so the shape is always an array.
+    return [pscustomobject]@{ ok = $true; file = 'models.json'; title = $inTitle; parked = $parked }
+}
+
+function New-ModelGroup([string]$product) {
+    # "+" tab: park the current file, start a fresh empty group. No confirmation
+    # by design - it is a file rename plus an empty file, and both are reversible
+    # by switching back to the parked tab.
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    $dir = Get-EditionHome $product
+    $activePath = Join-Path $dir 'models.json'
+
+    $outTitle = Get-GroupTitleFromFile $activePath 'models.json'
+    $safeOut = Get-SafeGroupTitle $outTitle $script:UntitledZh
+    $parked = ''
+    if (Test-Path -LiteralPath $activePath) {
+        $dest = Get-UniqueGroupPath $dir $safeOut
+        [IO.File]::Move($activePath, $dest)
+        $parked = [IO.Path]::GetFileName($dest)
+    }
+
+    $list = New-Object System.Collections.Generic.List[object]
+    $list.Add((New-GroupMarkerProps $script:UntitledZh))
+    $doc = ConvertTo-ModelsDocument $list 'array' $null
+    if (-not (ConvertFrom-ModelsText $doc).ok) { throw 'models_serialize_failed' }
+    Write-ModelsText $activePath $doc
+    Write-Log ("models group new: {0} parked={1}" -f $product, $parked)
+    return [pscustomobject]@{ ok = $true; parked = $parked; title = $script:UntitledZh }
+}
+
+function Set-ModelGroupTitle([string]$product, [string]$file, [string]$title) {
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    $dir = Get-EditionHome $product
+    if (-not $file) { throw 'group_required' }
+    if ($file -ne [IO.Path]::GetFileName($file)) { throw 'bad_group_name' }
+    if (-not (Test-GroupFile $file)) { throw 'bad_group_name' }
+    $safe = Get-SafeGroupTitle $title $script:UntitledZh
+
+    if ($file -eq 'models.json') {
+        Set-GroupMarkerInFile $product (Join-Path $dir 'models.json') $safe
+        Write-Log ("models group title: {0} active -> {1}" -f $product, $safe)
+        return [pscustomobject]@{ ok = $true; file = 'models.json'; title = $safe }
+    }
+
+    $p = Join-Path $dir $file
+    if (-not (Test-Path -LiteralPath $p)) { throw 'group_not_found' }
+    Set-GroupMarkerInFile $product $p $safe
+    # The name follows the title for a parked group, so the tab is legible in
+    # the folder too. Skipped when the new name would be the current one.
+    #
+    # Compare against the plain target name FIRST: Get-UniqueGroupPath answers
+    # "first name that does not exist yet", and this file itself is what exists,
+    # so asking it directly returned "<name>2" and the file was always renamed
+    # (with a stray suffix) even when the title had not effectively changed.
+    # Verified: renaming a group to its own current title produced "X2".
+    $plain = Join-Path $dir (Get-GroupFileName $safe)
+    if ($plain -eq $p) {
+        $dest = $p
+    } else {
+        $dest = Get-UniqueGroupPath $dir $safe
+        if ($dest -ne $p) { [IO.File]::Move($p, $dest) }
+    }
+    Write-Log ("models group title: {0} {1} -> {2} ({3})" -f `
+               $product, $file, $safe, [IO.Path]::GetFileName($dest))
+    return [pscustomobject]@{ ok = $true; file = [IO.Path]::GetFileName($dest); title = $safe }
+}
+
+function Resolve-ModelProbeUrl([string]$url, [bool]$useCustomProtocol) {
+    # The client appends /chat/completions unless the model opts out with
+    # useCustomProtocol, where the url goes through untouched. The probe has to
+    # follow the same rule or it would test a different address than the one
+    # real traffic uses.
+    $u = ([string]$url).Trim()
+    if (-not $u) { return '' }
+    if ($useCustomProtocol) { return $u }
+    if ($u -match '/chat/completions(?=[/?#]|$)') { return $u }
+    return ($u.TrimEnd('/') + '/chat/completions')
+}
+
+function Invoke-ModelHttp([string]$method, [string]$url, [string]$apiKey, [string]$body, [int]$timeoutSec) {
+    # Minimal HTTP call that also returns the status code on failure. Using
+    # HttpClient rather than Invoke-WebRequest because the latter throws on
+    # non-2xx and buries the status code in the exception.
+    $out = [pscustomobject]@{ ok = $false; status = 0; body = ''; error = ''; elapsedMs = 0 }
+    if (-not $url) { $out.error = 'url_required'; return $out }
+    try { $req = [Net.WebRequest]::Create($url) }
+    catch { $out.error = 'url_invalid'; return $out }
+    if ($null -eq $req) { $out.error = 'url_invalid'; return $out }
+
+    # Old PowerShell on Windows may still default to TLS 1.0, which every modern
+    # endpoint rejects. Ask for 1.2 explicitly.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol =
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch { }
+
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $req.Method = $method
+        $req.Timeout = $timeoutSec * 1000
+        $req.AllowAutoRedirect = $true
+        $req.UserAgent = 'WorkBuddyKeeper/' + $AppVersion
+        if ($apiKey) { $req.Headers['Authorization'] = 'Bearer ' + $apiKey }
+        if ($body) {
+            $bytes = [Text.Encoding]::UTF8.GetBytes($body)
+            $req.ContentType = 'application/json'
+            $req.ContentLength = $bytes.Length
+            $rs = $req.GetRequestStream()
+            $rs.Write($bytes, 0, $bytes.Length)
+            $rs.Close()
+        }
+        $resp = $req.GetResponse()
+        try {
+            $sr = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
+            $out.body = $sr.ReadToEnd()
+            $sr.Close()
+        } finally { $resp.Close() }
+        $out.status = [int]$resp.StatusCode
+        $out.ok = ($out.status -ge 200 -and $out.status -lt 300)
+    } catch [Net.WebException] {
+        $we = $_.Exception
+        if ($null -ne $we.Response) {
+            # A real HTTP answer (401, 404, ...) - keep the code and the body,
+            # they are what tells the user what actually went wrong.
+            try {
+                $sr = New-Object IO.StreamReader($we.Response.GetResponseStream(), [Text.Encoding]::UTF8)
+                $out.body = $sr.ReadToEnd()
+                $sr.Close()
+            } catch { }
+            try { $out.status = [int]$we.Response.StatusCode } catch { $out.status = 0 }
+        } else {
+            $out.error = $we.Status.ToString()   # NameResolutionFailure, Timeout, ...
+            $out.status = 0
+        }
+    } catch {
+        $out.error = 'request_failed'
+    } finally {
+        $sw.Stop()
+        $out.elapsedMs = [int]$sw.ElapsedMilliseconds
+        try { $req.Close() } catch { }
+    }
+    return $out
+}
+
+function Get-ModelProbeUrlCandidates([string]$url) {
+    # THE candidate list for a model listing. Every caller shares it - the batch
+    # importer and the editor's "pick a model" - so the two can no longer drift
+    # apart and disagree about which address a given input should reach.
+    #
+    # The order is fixed and deliberately dumb:
+    #
+    #   1. the url exactly as pasted   (already a listing address)
+    #   2. <origin>/models
+    #   3. <origin>/v1/models
+    #   4. <pasted>/models
+    #
+    # The user pastes all sorts of things - a bare origin, an origin plus /v1, a
+    # full chat address - and there is no way to tell which shape a given gateway
+    # will answer on, so all four are tried in a predictable order. Every
+    # candidate that was tried is reported back, so the outcome is explainable
+    # rather than silently landing on whichever one happened to answer.
+    #
+    # useCustomProtocol is NOT consulted here: it only governs whether the client
+    # appends /chat/completions to the chat address, and the batch importer has
+    # no such switch at all.
+    # Returns a plain array (no comma-prefix). Callers wrap with @() - that is
+    # the one combination that survives BOTH shapes: an empty result, a single
+    # result and many. The comma trick used elsewhere in this file preserves
+    # array-ness on a direct assignment but turns into a nested one-element
+    # array the moment someone writes @(f), which is a trap worth avoiding.
+    $out = New-Object System.Collections.Generic.List[string]
+    if (-not $url) { return $out.ToArray() }
+    $u = ([string]$url).Trim()
+    if (-not $u) { return $out.ToArray() }
+
+    $seen = @{}
+    $add = {
+        param($c)
+        if (-not $c) { return }
+        $c = ([string]$c).TrimEnd('/')
+        if ($c -and -not $seen.ContainsKey($c)) { $seen[$c] = $true; $out.Add($c) }
+    }
+
+    & $add $u
+
+    $m = [regex]::Match($u.TrimEnd('/'), '^(https?://[^/]+)(/.*)?$')
+    if ($m.Success) {
+        $origin = $m.Groups[1].Value
+        & $add ($origin + '/models')
+        & $add ($origin + '/v1/models')
+    }
+    & $add ($u.TrimEnd('/') + '/models')
+    return $out.ToArray()
+}
+
+function Get-ModelListWithFallback([string]$url, [string]$apiKey, [bool]$useCustomProtocol) {
+    # The batch importer only gets an origin or a /v1 root from the user, so it
+    # walks the candidate listing addresses until one answers with a usable
+    # data array. Which candidate won, and which were tried, are both reported -
+    # "it worked on the third guess" is information the user needs, not noise.
+    $out = [pscustomobject]@{
+        ok         = $false
+        status     = 0
+        code       = ''
+        message    = ''
+        usedUrl    = ''
+        tried      = @()
+        models     = @()
+        raw        = ''
+    }
+    if (-not $url) { $out.code = 'url_required'; $out.message = 'url is empty'; return $out }
+    if (-not $apiKey) { $out.code = 'key_required'; $out.message = 'apiKey is empty'; return $out }
+
+    $cands = @(Get-ModelProbeUrlCandidates $url)
+    if ($cands.Count -eq 0) {
+        $out.code = 'list_failed'
+        $out.message = 'could not derive a model listing address from the url'
+        return $out
+    }
+
+    $tried = New-Object System.Collections.Generic.List[object]
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $lastStatus = 0
+    $lastMessage = ''
+    foreach ($c in $cands) {
+        $r = Invoke-ModelHttp 'GET' $c $apiKey '' 20
+        $tried.Add([pscustomobject]@{ url = $c; status = $r.status; ok = [bool]$r.ok })
+        $lastStatus = $r.status
+        if (-not $r.ok) {
+            if ($r.status -eq 401 -or $r.status -eq 403) { $lastMessage = 'HTTP ' + $r.status + ' - the key was rejected' }
+            elseif ($r.status -gt 0) { $lastMessage = 'HTTP ' + $r.status }
+            else { $lastMessage = [string]$r.error }
+            $reasons.Add($c + ' -> ' + $lastMessage)
+            # A rejected key will be rejected everywhere; stop guessing.
+            if ($r.status -eq 401 -or $r.status -eq 403) { break }
+            continue
+        }
+        $parsed = $null
+        try { $parsed = $r.body | ConvertFrom-Json } catch { }
+        if ($null -eq $parsed) {
+            $lastMessage = 'HTTP ' + $r.status + ' but the body is not valid JSON'
+            $reasons.Add($c + ' -> ' + $lastMessage)
+            continue
+        }
+        $p = $parsed.PSObject.Properties['data']
+        if ($null -eq $p) {
+            $lastMessage = 'HTTP ' + $r.status + ' but the body has no data array'
+            $reasons.Add($c + ' -> ' + $lastMessage)
+            continue
+        }
+        $items = To-ItemArray $p.Value
+        $list = New-Object System.Collections.Generic.List[object]
+        foreach ($it in $items) {
+            if ($null -eq $it) { continue }
+            $mid = [string](Get-ModelProp $it 'id')
+            if (-not $mid) { $mid = [string](Get-ModelProp $it 'modelId') }
+            if (-not $mid) { continue }
+            $list.Add((New-ListingItem $it $mid))
+            if ($list.Count -ge 500) { break }
+        }
+        if ($list.Count -eq 0) { $lastMessage = 'the listing came back empty'; continue }
+        $out.ok = $true
+        $out.status = $r.status
+        $out.code = 'ok'
+        $out.message = 'model list fetched'
+        $out.usedUrl = $c
+        $out.models = $list.ToArray()
+        $out.tried = $tried.ToArray()
+        return $out
+    }
+
+    $out.status = $lastStatus
+    $out.code = 'list_failed'
+    $out.message = $lastMessage
+    $out.tried = $tried.ToArray()
+    return $out
+}
+
+function Test-ModelUsable([string]$product, $patch, [string]$originalId, [bool]$listOnly) {
+    # Two steps, mirroring what the client itself does:
+    #   1. GET the model listing and require HTTP 200 with a parseable data array
+    #   2. POST a one-token chat request to prove the model can actually answer
+    # Nothing is written to disk unless step 2 passes.
+    # $listOnly stops after step 1 and returns the entries, which is what the
+    # "pick a model" dialog needs.
+    $url = ([string]$patch.url).Trim()
+    $apiKey = [string]$patch.apiKey
+    $id = ([string]$patch.id).Trim()
+    $useCustom = $false
+    if ($null -ne $patch.PSObject.Properties['useCustomProtocol']) { $useCustom = [bool]$patch.useCustomProtocol }
+
+    # For an existing entry the stored key is the real one: the form leaves the
+    # box empty when the key is unchanged (encrypted keys are never shown).
+    if (-not $apiKey -and $originalId) {
+        # Prefer the same entry an edit would land on (visible twin first), so a
+        # duplicate pair does not test against the hidden copy's key.
+        $apiKey = Get-ModelStoredApiKey $product $originalId
+    }
+
+    $result = [pscustomobject]@{
+        ok          = $false
+        stage       = 'validate'
+        code        = ''
+        message     = ''
+        status      = 0
+        elapsedMs   = 0
+        listUrl     = ''
+        chatUrl     = ''
+        modelCount  = -1
+        models      = @()
+        reply       = ''
+    }
+
+    # --- required fields -----------------------------------------------------
+    if (-not $url)     { $result.code = 'url_required';  $result.message = 'url is empty'; return $result }
+    if (-not $apiKey)  { $result.code = 'key_required';  $result.message = 'apiKey is empty'; return $result }
+    # The listing does not need a model id; the chat probe does.
+    if (-not $listOnly -and -not $id) { $result.code = 'id_required'; $result.message = 'id is empty'; return $result }
+
+    # --- step 1: listing ----------------------------------------------------
+    # Same candidate list as the batch importer, same order. This dialog used to
+    # have its own single-candidate rule, which meant the two could disagree
+    # about where a listing lives; now there is one list and one order.
+    $result.stage = 'list'
+    $cands = @(Get-ModelProbeUrlCandidates $url)
+    if ($cands.Count -eq 0) {
+        $result.code = 'list_failed'
+        $result.message = 'could not derive a model listing address from the url'
+        return $result
+    }
+    $result.listUrl = [string]$cands[0]
+
+    $r = $null
+    $lu = ''
+    $listTried = New-Object System.Collections.Generic.List[object]
+    $listReason = ''
+    $parsed = $null
+    foreach ($c in $cands) {
+        $r = Invoke-ModelHttp 'GET' $c $apiKey '' 30
+        $listTried.Add([pscustomobject]@{ url = $c; status = $r.status; ok = [bool]$r.ok })
+        $result.status = $r.status
+        $result.elapsedMs = $r.elapsedMs
+        if (-not $r.ok) {
+            if ($r.status -eq 401 -or $r.status -eq 403) {
+                $listReason = 'HTTP ' + $r.status + ' - the key was rejected'
+                break
+            }
+            if ($r.status -eq 404) { $listReason = 'HTTP 404 - no model listing at this address' }
+            elseif ($r.status -gt 0) { $listReason = 'HTTP ' + $r.status }
+            else { $listReason = [string]$r.error }
+            continue
+        }
+        $parsed = $null
+        try { $parsed = $r.body | ConvertFrom-Json } catch { }
+        if ($null -eq $parsed) {
+            # Keep the shape diagnosis instead of letting the next candidate's
+            # HTTP code overwrite it: "answered 200 but not JSON" is the useful
+            # fact, and losing it was a real debugging dead end.
+            $listReason = 'HTTP ' + $r.status + ' but the body is not valid JSON'
+            continue
+        }
+        if ($null -eq $parsed.PSObject.Properties['data']) {
+            $listReason = 'HTTP ' + $r.status + ' but the body has no data array'
+            $parsed = $null
+            continue
+        }
+        $lu = $c
+        break
+    }
+    $result.listUrl = $lu
+    if ($null -eq $parsed) {
+        $result.code = 'list_failed'
+        $result.message = $listReason
+        if ($r -and $r.body) {
+            $s = ([string]$r.body).Trim()
+            if ($s.Length -gt 300) { $s = $s.Substring(0, 300) + '...' }
+            $result.reply = $s
+        }
+        return $result
+    }
+    $p = $parsed.PSObject.Properties['data']
+    if ($null -eq $p) {
+        $result.code = 'list_failed'
+        $result.message = 'HTTP ' + $r.status + ' but the body has no data array'
+        return $result
+    }
+    # To-ItemArray already returns a real array; wrapping it in @() again would
+    # nest the whole list into a single element.
+    $items = To-ItemArray $p.Value
+    $result.status = $r.status
+    $result.modelCount = $items.Count
+    # Same normalisation the batch importer uses, so a model looks the same
+    # wherever it is picked from. Kept small: the picker only shows id + name.
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($it in $items) {
+        if ($null -eq $it) { continue }
+        $mid = [string](Get-ModelProp $it 'id')
+        if (-not $mid) { $mid = [string](Get-ModelProp $it 'modelId') }
+        if (-not $mid) { continue }
+        $out.Add((New-ListingItem $it $mid))
+        if ($out.Count -ge 300) { break }
+    }
+    $result.models = $out.ToArray()
+
+    # --- step 2: minimal chat ----------------------------------------------
+    if ($listOnly) {
+        # The listing is all this caller wanted; the id may be empty or wrong.
+        $result.ok = $true
+        $result.stage = 'list'
+        $result.code = 'ok'
+        $result.message = 'model list fetched'
+        return $result
+    }
+    $result.stage = 'chat'
+    $chatUrl = Resolve-ModelProbeUrl $url $useCustom
+    $result.chatUrl = $chatUrl
+    $payload = @{
+        model      = $id
+        messages   = @(@{ role = 'user'; content = 'Reply with OK.' })
+        max_tokens = 1
+        stream     = $false
+    }
+    $json = $payload | ConvertTo-Json -Depth 6 -Compress
+    $r2 = Invoke-ModelHttp 'POST' $chatUrl $apiKey $json 60
+    $result.status = $r2.status
+    $result.elapsedMs = $r2.elapsedMs
+    if (-not $r2.ok) {
+        $result.code = 'chat_failed'
+        if ($r2.status -eq 404) { $result.message = 'HTTP 404 - the model id probably does not exist at this address' }
+        elseif ($r2.status -eq 401 -or $r2.status -eq 403) { $result.message = 'HTTP ' + $r2.status + ' - the key was rejected' }
+        elseif ($r2.status -eq 429) { $result.message = 'HTTP 429 - rate limited, try again later' }
+        elseif ($r2.status -gt 0) { $result.message = 'HTTP ' + $r2.status }
+        else { $result.message = $r2.error }
+        # Surface the server's own words - they are the most useful thing here.
+        if ($r2.body) {
+            $snippet = ([string]$r2.body).Trim()
+            if ($snippet.Length -gt 300) { $snippet = $snippet.Substring(0, 300) + '...' }
+            $result.reply = $snippet
+        }
+        return $result
+    }
+
+    $parsed2 = $null
+    try { $parsed2 = $r2.body | ConvertFrom-Json } catch { }
+    if ($null -eq $parsed2) {
+        $result.code = 'chat_bad_response'
+        $result.message = 'the reply is not valid JSON'
+        return $result
+    }
+    # Same permissive rule as the "test chat" button: a 2xx that parses is a
+    # reachable endpoint, empty content included; only an explicit error
+    # envelope fails. See Test-ModelChatReply for why.
+    $chk = Test-ModelChatReply $parsed2
+    if (-not $chk.ok) {
+        $result.code = 'chat_bad_response'
+        $result.message = 'HTTP ' + $r2.status + ' but the endpoint reported an error'
+        if ($chk.error) { $result.message = $result.message + ': ' + $chk.error }
+        return $result
+    }
+    $result.reply = $chk.text
+    $result.ok = $true
+    $result.code = 'ok'
+    $result.message = 'model answered'
+    return $result
+}
+
+function Test-ModelChatReply($parsed) {
+    # Decides whether a chat response body proves the model answered.
+    #
+    # Deliberately PERMISSIVE, and that is the important part. An earlier version
+    # required non-empty message.content, which made working reasoning models
+    # report "unavailable": the probe sends max_tokens=1, a thinking model spends
+    # that single token on reasoning_content, and content legitimately comes back
+    # as "". The client version before that (1.6.2) simply treated every HTTP 200
+    # as success, and the buttons worked.
+    #
+    # So the rule is: a 2xx that parses as JSON is a reachable chat endpoint,
+    # UNLESS the body is an explicit error envelope ({"error": ...}), which some
+    # gateways return with a 200. That rejects the one case that matters for
+    # correctness - a 200 carrying "bad request" - while never calling a working
+    # model broken. Reply text is carried along when present, for display only.
+    $out = [pscustomobject]@{ ok = $false; text = ''; error = '' }
+    if ($null -eq $parsed) { return $out }
+
+    # Explicit error envelope: the endpoint answered, but it said "no".
+    $ep = $parsed.PSObject.Properties['error']
+    if ($null -ne $ep -and $null -ne $ep.Value) {
+        if ($ep.Value -is [string]) { $out.error = [string]$ep.Value }
+        else {
+            $m = $ep.Value.PSObject.Properties['message']
+            if ($null -ne $m) { $out.error = [string]$m.Value }
+            if (-not $out.error) { $out.error = 'the endpoint returned an error' }
+        }
+        return $out
+    }
+
+    # A well-formed completion: take the text if there is any. Its ABSENCE is
+    # fine (see above); the shape being present is not required to pass either.
+    $ch = $parsed.PSObject.Properties['choices']
+    if ($null -ne $ch) {
+        $first = (To-ItemArray $ch.Value)[0]
+        if ($null -ne $first) {
+            $msg = $first.PSObject.Properties['message']
+            if ($null -ne $msg -and $null -ne $msg.Value) {
+                $c = $msg.Value.PSObject.Properties['content']
+                if ($null -ne $c -and $null -ne $c.Value) { $out.text = [string]$c.Value }
+            } else {
+                $dl = $first.PSObject.Properties['delta']
+                if ($null -ne $dl -and $null -ne $dl.Value) {
+                    $c = $dl.Value.PSObject.Properties['content']
+                    if ($null -ne $c -and $null -ne $c.Value) { $out.text = [string]$c.Value }
+                }
+            }
+        }
+    }
+    $out.ok = $true
+    return $out
+}
+
+function Get-ModelChatUrlCandidates([string]$url, [bool]$useCustomProtocol) {
+    # Candidate chat addresses for the editor's "test chat" button, tried in
+    # order. The user typically pastes a base like "https://host/v1" and expects
+    # the tool to work out that the conversation endpoint is one segment deeper.
+    #
+    # This is deliberately more forgiving than Resolve-ModelProbeUrl (which is
+    # used when saving/picking and must not paper over a wrong address): here the
+    # whole point is to discover the right address and hand it back so the form
+    # can be corrected in place.
+    $out = New-Object System.Collections.Generic.List[string]
+    if (-not $url) { return ,$out.ToArray() }
+    $u = ([string]$url).Trim()
+    if ($useCustomProtocol) {
+        # "use as-is" means exactly that: no guessing.
+        $out.Add($u)
+        return ,$out.ToArray()
+    }
+    $seen = @{}
+    $add = {
+        param($c)
+        if (-not $c) { return }
+        $c = $c.TrimEnd('/')
+        if ($c -and -not $seen.ContainsKey($c)) { $seen[$c] = $true; $out.Add($c) }
+    }
+
+    $m = [regex]::Match($u.TrimEnd('/'), '^(https?://[^/]+)(/.*)?$')
+    if (-not $m.Success) { & $add $u; return ,$out.ToArray() }
+    $origin = $m.Groups[1].Value
+    $path = $m.Groups[2].Value
+
+    # Already a full chat path: that is the only thing worth trying first, but
+    # a trailing /v1 duplicate is still added in case the host wants it.
+    if ($u -match '/chat/completions(?=[/?#]|$)') {
+        & $add $u
+        return ,$out.ToArray()
+    }
+
+    # 1. the url as pasted + /chat/completions  (host/v1 -> host/v1/chat/completions)
+    #    TrimEnd first: a url the user ended with "/" would otherwise produce
+    #    "host/v1//chat/completions" - a double slash the endpoint may 404 on.
+    & $add ($u.TrimEnd('/') + '/chat/completions')
+    # 2. the bare origin + /v1/chat/completions  (host -> host/v1/chat/completions)
+    & $add ($origin.TrimEnd('/') + '/v1/chat/completions')
+    # 3. last resort: the pasted path untouched (a host that serves chat at /)
+    & $add $u
+    return ,$out.ToArray()
+}
+
+function Test-ModelChat([string]$product, $patch, [string]$originalId) {
+    # The editor's "test chat" button. Unlike Test-ModelUsable this does NOT
+    # walk the model listing first: the user's rule is "test the return code,
+    # then test the conversation". So it posts one minimal chat request per
+    # candidate address and accepts a candidate only when BOTH hold:
+    #   - the HTTP status is a success code, and
+    #   - the body really is a chat completion (choices[0].message.content).
+    #
+    # When the address that works is not the one typed in, it is reported back
+    # as fixedUrl so the form can replace the field with the working value.
+    $url = ([string]$patch.url).Trim()
+    $apiKey = [string]$patch.apiKey
+    $id = ([string]$patch.id).Trim()
+    $useCustom = $false
+    if ($null -ne $patch.PSObject.Properties['useCustomProtocol']) { $useCustom = [bool]$patch.useCustomProtocol }
+
+    # An existing entry's stored key is the real one; the editor leaves the box
+    # empty when the key is unchanged (encrypted keys are never shown).
+    #
+    # Get-ModelStoredApiKey returns '' for an ENCRYPTED key, which lands in the
+    # same place as "there is no key". Those are different situations for the
+    # user: an encrypted key just needs to be typed in the editor once, whereas
+    # a missing key has to be filled in. Say which one it is.
+    $keyIsEncrypted = $false
+    if (-not $apiKey -and $originalId) {
+        # Prefer the same entry an edit would land on (visible twin first), so a
+        # duplicate pair does not test against the hidden copy's key.
+        $apiKey = Get-ModelStoredApiKey $product $originalId
+        if (-not $apiKey) {
+            $rawStored = Get-ModelsRaw $product
+            if ($rawStored.valid) {
+                $si = Find-ModelEntryIndex $rawStored.items $originalId
+                if ($si -ge 0) {
+                    $sk = Get-ModelProp $rawStored.items[$si] 'apiKey'
+                    if ($null -ne $sk -and (Test-WbEncrypted $sk)) { $keyIsEncrypted = $true }
+                }
+            }
+        }
+    }
+
+    $result = [pscustomobject]@{
+        ok         = $false
+        code       = ''
+        message    = ''
+        status     = 0
+        elapsedMs  = 0
+        chatUrl    = ''
+        fixedUrl   = ''
+        reply      = ''
+        tried      = @()
+    }
+    if (-not $url)    { $result.code = 'url_required'; $result.message = 'url is empty'; return $result }
+    if (-not $apiKey) {
+        if ($keyIsEncrypted) {
+            $result.code = 'key_encrypted'
+            $result.message = 'the stored key is encrypted; type it in the editor once to test'
+        } else {
+            $result.code = 'key_required'
+            $result.message = 'apiKey is empty'
+        }
+        return $result
+    }
+    if (-not $id)     { $result.code = 'id_required'; $result.message = 'id is empty'; return $result }
+
+    $cands = Get-ModelChatUrlCandidates $url $useCustom
+    if ($cands.Count -eq 0) {
+        $result.code = 'url_invalid'
+        $result.message = 'the address could not be parsed'
+        return $result
+    }
+
+    $payload = @{
+        model      = $id
+        messages   = @(@{ role = 'user'; content = 'Reply with OK.' })
+        max_tokens = 1
+        stream     = $false
+    }
+    $json = $payload | ConvertTo-Json -Depth 6 -Compress
+
+    $tried = New-Object System.Collections.Generic.List[object]
+    $lastStatus = 0
+    $lastMessage = ''
+    $lastBody = ''
+    $spentMs = 0
+
+    foreach ($c in $cands) {
+        # Step 1 + 2 in one request: the status code and the conversation come
+        # from the same POST, so a success code with a broken body is still a
+        # failure here rather than being reported as "model works".
+        $r = Invoke-ModelHttp 'POST' $c $apiKey $json 45
+        $spentMs += [int]$r.elapsedMs
+        $tried.Add([pscustomobject]@{ url = $c; status = $r.status; ok = [bool]$r.ok })
+        $lastStatus = $r.status
+        if ($r.body) {
+            $b = ([string]$r.body).Trim()
+            if ($b.Length -gt 300) { $b = $b.Substring(0, 300) + '...' }
+            $lastBody = $b
+        }
+
+        if (-not $r.ok) {
+            if ($r.status -eq 401 -or $r.status -eq 403) {
+                $lastMessage = 'HTTP ' + $r.status + ' - the key was rejected'
+                # A rejected key is rejected everywhere; stop guessing.
+                break
+            }
+            if ($r.status -eq 429) { $lastMessage = 'HTTP 429 - rate limited' }
+            elseif ($r.status -gt 0) { $lastMessage = 'HTTP ' + $r.status }
+            else { $lastMessage = [string]$r.error }
+            continue
+        }
+
+        $parsed = $null
+        try { $parsed = $r.body | ConvertFrom-Json } catch { }
+        if ($null -eq $parsed) {
+            $lastMessage = 'HTTP ' + $r.status + ' but the body is not valid JSON'
+            continue
+        }
+        # A reachable endpoint. Do NOT require non-empty content: with
+        # max_tokens=1 a reasoning model legitimately answers with an empty
+        # string (its one token went into reasoning_content). Only an explicit
+        # error envelope is a failure. See Test-ModelChatReply.
+        $chk = Test-ModelChatReply $parsed
+        if (-not $chk.ok) {
+            $lastMessage = 'HTTP ' + $r.status + ' but the endpoint reported an error'
+            if ($chk.error) { $lastMessage = $lastMessage + ': ' + $chk.error }
+            continue
+        }
+        $text = $chk.text
+
+        $result.ok = $true
+        $result.code = 'ok'
+        $result.message = 'model answered'
+        $result.status = $r.status
+        $result.reply = $text
+        $result.chatUrl = $c
+        $result.elapsedMs = $spentMs
+        # Only report a replacement when the working address differs from what
+        # the user typed: the form keeps its own value otherwise.
+        if ($c -ne $url.TrimEnd('/') -and $c -ne $url) { $result.fixedUrl = $c }
+        $result.tried = $tried.ToArray()
+        return $result
+    }
+
+    $result.code = 'chat_failed'
+    $result.status = $lastStatus
+    $result.message = $lastMessage
+    $result.reply = $lastBody
+    $result.elapsedMs = $spentMs
+    if ($cands.Count -gt 0) { $result.chatUrl = $cands[0] }
+    $result.tried = $tried.ToArray()
+    return $result
+}
+
+function Test-ModelBatch([string]$url, [string]$apiKey, $ids, [bool]$useCustomProtocol, [int]$concurrency) {
+    # Probes many model ids against one endpoint. Each id gets the same two-step
+    # probe as the single-model path (chat request, real answer), but they run in
+    # parallel: a listing with 30 models would take minutes one at a time.
+    #
+    # Concurrency is a runspace pool - Start-ThreadJob's jobs are separate
+    # processes on Windows PowerShell 5.1 and would not see the helper functions.
+    # Every property the function may set is declared up front: PowerShell raises
+    # "property cannot be found" on assigning to one that does not exist, and the
+    # error paths below set these.
+    $out = [pscustomobject]@{ ok = $true; error = ''; results = @(); chatUrl = ''; triedChat = @() }
+    if (-not $url)     { $out.ok = $false; $out.error = 'url_required'; return $out }
+    if (-not $apiKey)  { $out.ok = $false; $out.error = 'key_required'; return $out }
+
+    $list = New-Object System.Collections.Generic.List[string]
+    foreach ($x in (To-ItemArray $ids)) {
+        $s = ([string]$x).Trim()
+        if ($s) { $list.Add($s) }
+    }
+    if ($list.Count -eq 0) { $out.ok = $false; $out.error = 'ids_required'; return $out }
+    if ($list.Count -gt 200) { $list = $list.GetRange(0, 200) }
+
+    if ($concurrency -lt 1) { $concurrency = 8 }
+    if ($concurrency -gt 16) { $concurrency = 16 }
+
+    # The chat address falls back the same way the listing does: try the derived
+    # /chat/completions first, and if every model 404s there, try /v1/chat/completions.
+    $cands = New-Object System.Collections.Generic.List[string]
+    foreach ($c in @(Get-ModelProbeUrlCandidates $url)) {
+        $cText = ([string]$c).TrimEnd('/')
+        if ($cText -match '/models$') { $cText = $cText.Substring(0, $cText.Length - 7) }
+        if ($cText -match '/chat/completions$') { $cands.Add($cText) }
+        else { $cands.Add($cText + '/chat/completions') }
+    }
+    if ($cands.Count -eq 0) { $out.ok = $false; $out.error = 'url_invalid'; return $out }
+
+    $script:batchProbe = {
+        param($chatUrl, $apiKey, $modelId, $userAgent)
+        $res = [pscustomobject]@{
+            id = $modelId; ok = $false; status = 0; elapsedMs = 0
+            code = ''; message = ''; reply = ''
+        }
+        $req = $null
+        try { $req = [Net.WebRequest]::Create($chatUrl) } catch { }
+        if ($null -eq $req) { $res.code = 'url_invalid'; $res.message = 'the address could not be parsed'; return $res }
+        try {
+            [Net.ServicePointManager]::SecurityProtocol =
+                [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        } catch { }
+        $payload = @{
+            model      = $modelId
+            messages   = @(@{ role = 'user'; content = 'Reply with OK.' })
+            max_tokens = 1
+            stream     = $false
+        }
+        $json = $payload | ConvertTo-Json -Depth 6 -Compress
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $req.Method = 'POST'
+            $req.Timeout = 45000
+            $req.AllowAutoRedirect = $true
+            $req.UserAgent = $userAgent
+            $req.Headers['Authorization'] = 'Bearer ' + $apiKey
+            $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+            $req.ContentType = 'application/json'
+            $req.ContentLength = $bytes.Length
+            $rs = $req.GetRequestStream()
+            $rs.Write($bytes, 0, $bytes.Length)
+            $rs.Close()
+            $resp = $req.GetResponse()
+            try {
+                $sr = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
+                $body = $sr.ReadToEnd()
+                $sr.Close()
+            } finally { $resp.Close() }
+            $res.status = [int]$resp.StatusCode
+            $res.elapsedMs = [int]$sw.ElapsedMilliseconds
+            $parsed = $null
+            try { $parsed = $body | ConvertFrom-Json } catch { }
+            if ($null -eq $parsed) {
+                $res.code = 'chat_bad_response'
+                $res.message = 'the reply is not valid JSON'
+                $s = ([string]$body).Trim(); if ($s.Length -gt 200) { $s = $s.Substring(0, 200) + '...' }
+                $res.reply = $s
+                return $res
+            }
+            # Same permissive rule as the single-model probe: a 2xx that parses
+            # as JSON is a reachable endpoint, and an EMPTY content is still a
+            # pass (max_tokens=1 on a reasoning model puts its one token into
+            # reasoning_content, so content legitimately comes back ""). The one
+            # thing that does fail is an explicit error envelope returned with a
+            # 200, which is what a body check is actually for.
+            #
+            # Inlined on purpose: this runs inside a runspace pool that only sees
+            # the script block, not the module's helpers.
+            $errMsg = ''
+            $ep = $parsed.PSObject.Properties['error']
+            if ($null -ne $ep -and $null -ne $ep.Value) {
+                if ($ep.Value -is [string]) { $errMsg = [string]$ep.Value }
+                else {
+                    $m = $ep.Value.PSObject.Properties['message']
+                    if ($null -ne $m) { $errMsg = [string]$m.Value }
+                    if (-not $errMsg) { $errMsg = 'the endpoint returned an error' }
+                }
+            }
+            if ($errMsg) {
+                $res.code = 'chat_bad_response'
+                $res.message = 'HTTP ' + $res.status + ' but the endpoint reported an error: ' + $errMsg
+                $s = ([string]$body).Trim(); if ($s.Length -gt 200) { $s = $s.Substring(0, 200) + '...' }
+                $res.reply = $s
+                return $res
+            }
+            # Pick up any reply text for display; its absence is not a failure.
+            $ch = $parsed.PSObject.Properties['choices']
+            if ($null -ne $ch) {
+                $first = @($ch.Value)[0]
+                if ($null -ne $first) {
+                    $msg = $first.PSObject.Properties['message']
+                    if ($null -ne $msg -and $null -ne $msg.Value) {
+                        $c = $msg.Value.PSObject.Properties['content']
+                        if ($null -ne $c -and $null -ne $c.Value) { $res.reply = [string]$c.Value }
+                    } else {
+                        $dl = $first.PSObject.Properties['delta']
+                        if ($null -ne $dl -and $null -ne $dl.Value) {
+                            $c = $dl.Value.PSObject.Properties['content']
+                            if ($null -ne $c -and $null -ne $c.Value) { $res.reply = [string]$c.Value }
+                        }
+                    }
+                }
+            }
+            $res.ok = $true
+            $res.code = 'ok'
+            $res.message = 'model answered'
+            return $res
+        } catch [Net.WebException] {
+            $res.elapsedMs = [int]$sw.ElapsedMilliseconds
+            $we = $_.Exception
+            if ($null -ne $we.Response) {
+                try {
+                    $res.status = [int]$we.Response.StatusCode
+                    $sr = New-Object IO.StreamReader($we.Response.GetResponseStream(), [Text.Encoding]::UTF8)
+                    $s = $sr.ReadToEnd(); $sr.Close()
+                    if ($s.Length -gt 200) { $s = $s.Substring(0, 200) + '...' }
+                    $res.reply = $s
+                } catch { }
+            }
+            $res.code = 'chat_failed'
+            if ($res.status -eq 404) { $res.message = 'HTTP 404 - the model id probably does not exist here' }
+            elseif ($res.status -eq 401 -or $res.status -eq 403) { $res.message = 'HTTP ' + $res.status + ' - the key was rejected' }
+            elseif ($res.status -eq 429) { $res.message = 'HTTP 429 - rate limited' }
+            elseif ($res.status -gt 0) { $res.message = 'HTTP ' + $res.status }
+            else { $res.message = [string]$we.Message }
+            return $res
+        } catch {
+            $res.elapsedMs = [int]$sw.ElapsedMilliseconds
+            $res.code = 'chat_failed'
+            $res.message = [string]$_.Exception.Message
+            return $res
+        }
+    }
+
+    $pool = $null
+    $results = New-Object System.Collections.Generic.List[object]
+    $usedChat = ''
+    foreach ($chatUrl in $cands) {
+        $pool = [runspacefactory]::CreateRunspacePool(1, $concurrency)
+        $pool.Open()
+        $handles = New-Object System.Collections.Generic.List[object]
+        foreach ($mid in $list) {
+            $ps = [powershell]::Create()
+            $ps.RunspacePool = $pool
+            [void]$ps.AddScript($script:batchProbe).AddArgument($chatUrl).AddArgument($apiKey).AddArgument($mid).AddArgument('WorkBuddyKeeper/' + $AppVersion)
+            $handles.Add([pscustomobject]@{ ps = $ps; h = $ps.BeginInvoke() })
+        }
+        $results = New-Object System.Collections.Generic.List[object]
+        foreach ($x in $handles) {
+            try {
+                $r = $x.ps.EndInvoke($x.h)
+                foreach ($one in (To-ItemArray $r)) { if ($null -ne $one) { $results.Add($one) } }
+            } catch {
+                $results.Add([pscustomobject]@{ id = '?'; ok = $false; status = 0; elapsedMs = 0
+                                               code = 'probe_error'; message = [string]$_.Exception.Message; reply = '' })
+            } finally { $x.ps.Dispose() }
+        }
+        $pool.Close(); $pool.Dispose(); $pool = $null
+        $usedChat = $chatUrl
+        # If anything answered, this address is the right one. Only when every
+        # single model failed do we try the next candidate address.
+        $anyOk = $false
+        foreach ($r in $results) { if ($r.ok) { $anyOk = $true; break } }
+        if ($anyOk) { break }
+    }
+    if ($null -ne $pool) { try { $pool.Close(); $pool.Dispose() } catch { } }
+
+    $out.chatUrl = $usedChat
+    $out.triedChat = $cands.ToArray()
+    $out.results = $results.ToArray()
+    return $out
+}
+
+function Get-ModelGroupEntries([string]$product, [string]$file, $ids) {
+    # One resolved "what to test" row per model, from whichever file was asked
+    # for. Split out from the probe so the active file and a parked group go
+    # through exactly the same resolution rules - including the two cases that
+    # are reported as failures rather than skipped (no url, encrypted key).
+    #
+    # Returns @{ ok; error; entries }.
+    $out = [pscustomobject]@{ ok = $true; error = ''; entries = @() }
+    if (-not (Test-Edition $product)) { $out.ok = $false; $out.error = 'unknown_edition'; return $out }
+    if (-not $file) { $file = 'models.json' }
+    $dir = Get-EditionHome $product
+    $path = Join-Path $dir $file
+    if (-not (Test-Path -LiteralPath $path)) { $out.ok = $false; $out.error = 'group_not_found'; return $out }
+
+    $items = $null
+    if ($file -eq 'models.json') {
+        $raw = Get-ModelsRaw $product
+        if (-not $raw.valid) { $out.ok = $false; $out.error = 'models_malformed'; return $out }
+        $items = $raw.items
+    } else {
+        $text = ''
+        try { $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8) }
+        catch { $out.ok = $false; $out.error = 'read_failed'; return $out }
+        $parsed = ConvertFrom-ModelsText $text
+        if (-not $parsed.ok) { $out.ok = $false; $out.error = 'models_malformed'; return $out }
+        $items = $parsed.items
+    }
+
+    $want = @{}
+    foreach ($x in (To-ItemArray $ids)) { $s = ([string]$x).Trim(); if ($s) { $want[$s] = $true } }
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($e in $items) {
+        if ($null -eq $e) { continue }
+        if (-not ($e -is [psobject]) -or $e -is [string] -or $e -is [ValueType]) { continue }
+        if (Test-GroupMarker $e) { continue }        # the title marker is not a model
+        if (Test-ModelArchived $e) { continue }      # hidden entries are not in the client either
+        $mid = ([string](Get-ModelKey $e)).Trim()
+        if (-not $mid) { continue }
+        if ($want.Count -gt 0 -and -not $want.ContainsKey($mid)) { continue }
+        $url = ([string](Get-ModelProp $e 'url')).Trim()
+        # An encrypted key cannot be used here: this process has no way to
+        # decrypt what the client encrypted. Reported as a failure with a hint,
+        # not silently skipped.
+        #
+        # Test-WbEncrypted looks for an "envelope" property, so it must see the
+        # RAW value - casting to [string] first produced "@{envelope=...}" and
+        # the check then always said "not encrypted", which sent that text out
+        # as the Bearer token.
+        $rawKey = Get-ModelProp $e 'apiKey'
+        $key = ''
+        $enc = $false
+        if ($null -ne $rawKey) {
+            if (Test-WbEncrypted $rawKey) { $enc = $true }
+            else { $key = [string]$rawKey }
+        }
+        $ucp = $false
+        $p = Get-ModelProp $e 'useCustomProtocol'
+        if ($null -ne $p) { $ucp = [bool]$p }
+        $list.Add([pscustomobject]@{ id = $mid; url = $url; apiKey = $key; enc = $enc; ucp = $ucp })
+        if ($list.Count -ge 200) { break }
+    }
+    $out.entries = $list.ToArray()
+    return $out
+}
+
+function Test-ModelGroupChatEntries($list, [int]$concurrency) {
+    # The probe runner. Takes the rows Get-ModelGroupEntries produced and hits
+    # each model's OWN chat address with its OWN key, in parallel.
+    # Entries that cannot be probed at all become failure rows here, so the
+    # caller always gets one result per model it asked about.
+    $out = New-Object System.Collections.Generic.List[object]
+    if ($concurrency -lt 1) { $concurrency = 8 }
+    if ($concurrency -gt 16) { $concurrency = 16 }
+    $rows = @($list)
+    if ($rows.Count -eq 0) { return ,$out.ToArray() }
+
+    $pool = [runspacefactory]::CreateRunspacePool(1, $concurrency)
+    $pool.Open()
+    $handles = New-Object System.Collections.Generic.List[object]
+    foreach ($item in $rows) {
+        if ($item.enc) {
+            $handles.Add([pscustomobject]@{ ps = $null; h = $null; pre = [pscustomobject]@{
+                id = $item.id; ok = $false; status = 0; elapsedMs = 0
+                code = 'key_encrypted'; message = 'the stored key is encrypted; open the editor and enter it to test'; reply = '' } })
+            continue
+        }
+        if (-not $item.url) {
+            $handles.Add([pscustomobject]@{ ps = $null; h = $null; pre = [pscustomobject]@{
+                id = $item.id; ok = $false; status = 0; elapsedMs = 0
+                code = 'url_required'; message = 'this model has no endpoint address'; reply = '' } })
+            continue
+        }
+        $chatUrl = Resolve-ModelProbeUrl $item.url $item.ucp
+        $ps = [powershell]::Create()
+        $ps.RunspacePool = $pool
+        [void]$ps.AddScript($script:groupProbe).AddArgument($chatUrl).AddArgument($item.apiKey).AddArgument($item.id).AddArgument('WorkBuddyKeeper/' + $AppVersion)
+        $handles.Add([pscustomobject]@{ ps = $ps; h = $ps.BeginInvoke(); pre = $null })
+    }
+    foreach ($x in $handles) {
+        if ($null -ne $x.pre) { $out.Add($x.pre); continue }
+        try {
+            $r = $x.ps.EndInvoke($x.h)
+            foreach ($one in (To-ItemArray $r)) { if ($null -ne $one) { $out.Add($one) } }
+        } catch {
+            $out.Add([pscustomobject]@{ id = '?'; ok = $false; status = 0; elapsedMs = 0
+                                       code = 'probe_error'; message = [string]$_.Exception.Message; reply = '' })
+        } finally { $x.ps.Dispose() }
+    }
+    $pool.Close(); $pool.Dispose()
+    return ,$out.ToArray()
+}
+
+function Test-ModelGroupChat([string]$product, [string]$file, $ids, [int]$concurrency) {
+    # "Test" on a model-file tab: probe the models INSIDE one models file, each
+    # against its OWN url and its OWN stored key.
+    #
+    # This is not the same thing as Test-ModelBatch. That one takes a single
+    # endpoint + key from the batch-import dialog and runs every id against it.
+    # A model file is a mixed bag - one entry may be DeepSeek, the next a local
+    # gateway with a different key - so the shared-endpoint shape simply does
+    # not apply here.
+    #
+    # $ids may be empty, which means "every model in the file".
+    $out = [pscustomobject]@{ ok = $true; error = ''; results = @(); total = 0 }
+    $prep = Get-ModelGroupEntries $product $file $ids
+    if (-not $prep.ok) { $out.ok = $false; $out.error = $prep.error; return $out }
+    $rows = @($prep.entries)
+    $out.total = $rows.Count
+    if ($rows.Count -eq 0) { return $out }
+    $out.results = Test-ModelGroupChatEntries $rows $concurrency
+    $okCount = 0
+    foreach ($r in $out.results) { if ($r.ok) { $okCount++ } }
+    Write-Log ("models group-test: file={0} total={1} ok={2}" -f $file, $out.results.Count, $okCount)
+    return $out
+}
+
+$script:groupProbe = {
+    param($chatUrl, $apiKey, $modelId, $userAgent)
+    $res = [pscustomobject]@{ id = $modelId; ok = $false; status = 0; elapsedMs = 0; code = ''; message = ''; reply = '' }
+    $req = $null
+    try { $req = [Net.WebRequest]::Create($chatUrl) } catch { }
+    if ($null -eq $req) { $res.code = 'url_invalid'; $res.message = 'the address could not be parsed'; return $res }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol =
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch { }
+    $payload = @{ model = $modelId; messages = @(@{ role = 'user'; content = 'Reply with OK.' }); max_tokens = 1; stream = $false }
+    $json = $payload | ConvertTo-Json -Depth 6 -Compress
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $req.Method = 'POST'
+        $req.Timeout = 45000
+        $req.AllowAutoRedirect = $true
+        $req.UserAgent = $userAgent
+        $req.Headers['Authorization'] = 'Bearer ' + $apiKey
+        $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+        $req.ContentType = 'application/json'
+        $req.ContentLength = $bytes.Length
+        $rs = $req.GetRequestStream()
+        $rs.Write($bytes, 0, $bytes.Length)
+        $rs.Close()
+        $resp = $req.GetResponse()
+        try {
+            $sr = New-Object IO.StreamReader($resp.GetResponseStream(), [Text.Encoding]::UTF8)
+            $body = $sr.ReadToEnd(); $sr.Close()
+        } finally { $resp.Close() }
+        $res.status = [int]$resp.StatusCode
+        $res.elapsedMs = [int]$sw.ElapsedMilliseconds
+        $parsed = $null
+        try { $parsed = $body | ConvertFrom-Json } catch { }
+        if ($null -eq $parsed) {
+            $res.code = 'chat_bad_response'; $res.message = 'the reply is not valid JSON'
+            return $res
+        }
+        # Same permissive rule as every other probe here: 2xx + parseable JSON,
+        # and an EMPTY content still passes (max_tokens=1 on a reasoning model
+        # spends its token on reasoning_content).
+        $errMsg = ''
+        $ep = $parsed.PSObject.Properties['error']
+        if ($null -ne $ep -and $null -ne $ep.Value) {
+            if ($ep.Value -is [string]) { $errMsg = [string]$ep.Value }
+            else {
+                $m = $ep.Value.PSObject.Properties['message']
+                if ($null -ne $m) { $errMsg = [string]$m.Value }
+                if (-not $errMsg) { $errMsg = 'the endpoint returned an error' }
+            }
+        }
+        if ($errMsg) { $res.code = 'chat_bad_response'; $res.message = 'HTTP ' + $res.status + ' but the endpoint reported an error: ' + $errMsg; return $res }
+        $ch = $parsed.PSObject.Properties['choices']
+        if ($null -ne $ch) {
+            $first = @($ch.Value)[0]
+            if ($null -ne $first) {
+                $msg = $first.PSObject.Properties['message']
+                if ($null -ne $msg -and $null -ne $msg.Value) {
+                    $c = $msg.Value.PSObject.Properties['content']
+                    if ($null -ne $c -and $null -ne $c.Value) { $res.reply = [string]$c.Value }
+                } else {
+                    $dl = $first.PSObject.Properties['delta']
+                    if ($null -ne $dl -and $null -ne $dl.Value) {
+                        $c = $dl.Value.PSObject.Properties['content']
+                        if ($null -ne $c -and $null -ne $c.Value) { $res.reply = [string]$c.Value }
+                    }
+                }
+            }
+        }
+        $res.ok = $true; $res.code = 'ok'; $res.message = 'model answered'
+        return $res
+    } catch [Net.WebException] {
+        $res.elapsedMs = [int]$sw.ElapsedMilliseconds
+        $we = $_.Exception
+        if ($null -ne $we.Response) {
+            try {
+                $res.status = [int]$we.Response.StatusCode
+                $sr = New-Object IO.StreamReader($we.Response.GetResponseStream(), [Text.Encoding]::UTF8)
+                $s = $sr.ReadToEnd(); $sr.Close()
+                if ($s.Length -gt 200) { $s = $s.Substring(0, 200) + '...' }
+                $res.reply = $s
+            } catch { }
+        }
+        $res.code = 'chat_failed'
+        if ($res.status -eq 404) { $res.message = 'HTTP 404 - the model id probably does not exist here' }
+        elseif ($res.status -eq 401 -or $res.status -eq 403) { $res.message = 'HTTP ' + $res.status + ' - the key was rejected' }
+        elseif ($res.status -eq 429) { $res.message = 'HTTP 429 - rate limited' }
+        elseif ($res.status -gt 0) { $res.message = 'HTTP ' + $res.status }
+        else { $res.message = [string]$we.Message }
+        return $res
+    } catch {
+        $res.elapsedMs = [int]$sw.ElapsedMilliseconds
+        $res.code = 'chat_failed'; $res.message = [string]$_.Exception.Message
+        return $res
+    }
+}
+
 function Get-DbOwnerCount([string]$dbPath, [string]$uid) {
+    # Counts only LOCAL rows, deliberately. Every other place that moves a
+    # conversation between accounts filters on transport='local' (a cloud row's
+    # owner belongs to the server; rewriting the local mirror would just make the
+    # sidebar disagree with reality). The count has to use the same filter as the
+    # remap it guards, or the check would pass on rows the remap will not touch.
     $db = Open-WbDatabasePath $dbPath
     try {
-        $rows = [WbSqlite]::Query($db, 'SELECT count(*) AS n FROM sessions WHERE user_id=?1', @($uid))
+        $rows = [WbSqlite]::Query($db,
+            "SELECT count(*) AS n FROM sessions WHERE user_id=?1 AND transport='local'", @($uid))
     } finally {
         [WbSqlite]::Close($db)
     }
@@ -686,7 +3524,14 @@ function Invoke-UidRemap([string]$dbPath, [string]$oldUid, [string]$newUid) {
     try {
         [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
         try {
-            $n = [WbSqlite]::Exec($db, 'UPDATE sessions SET user_id=?1 WHERE user_id=?2', @($newUid, $oldUid))
+            # transport='local' is REQUIRED here, and was missing. A cloud row's
+            # owner lives on the server; reassigning the local mirror would only
+            # desync the sidebar from the account it really belongs to. Every
+            # other conversation update in this file already carries this filter,
+            # and the switch dialog promises to move local conversations only.
+            $n = [WbSqlite]::Exec($db,
+                "UPDATE sessions SET user_id=?1 WHERE user_id=?2 AND transport='local'",
+                @($newUid, $oldUid))
             [void][WbSqlite]::Exec($db, 'COMMIT', $null)
         } catch {
             [void][WbSqlite]::Exec($db, 'ROLLBACK', $null)
@@ -702,12 +3547,148 @@ function Invoke-UidRemap([string]$dbPath, [string]$oldUid, [string]$newUid) {
     }
 }
 
-function Merge-DbSessions([string]$product, [string]$srcDbPath) {
+function Compare-SyncCandidate([long]$srcBytes, [long]$srcMs, [long]$dstBytes, [long]$dstMs) {
+    # Decides what "sync by time" should do about ONE conversation that exists
+    # on both sides. Returns one of:
+    #
+    #   'push'   - the backup copy wins, overwrite what is on disk
+    #   'keep'   - the local copy is at least as good, leave it alone
+    #   'ask'    - the two disagree in a way no rule can settle
+    #
+    # The rules, in the order they are checked:
+    #
+    #   1. same time AND same size            -> keep  (nothing to do)
+    #   2. backup bigger AND newer            -> push  (backup is strictly better)
+    #   3. backup older AND smaller           -> keep  (local is strictly better)
+    #   4. anything else                       -> ask
+    #
+    # Rules 1 and 3 both mean "keep", and they are not redundant: (1) is
+    # "identical", (3) is "the local copy is strictly ahead on both axes".
+    # Rule (3) is what stops a restore from a stale backup walking newer local
+    # work backwards - the backup being older AND smaller can only mean the
+    # local side moved on, so overwriting it would lose changes for no gain.
+    #
+    # "Anything else" is deliberately the catch-all rather than a guess. What
+    # lands there is exactly the genuinely ambiguous shapes:
+    #   - newer but smaller (an edit that removed text)
+    #   - older but bigger  (the local copy grew after the backup)
+    # In both, the file that looks better on one axis looks worse on the other,
+    # and silently picking one is how a sync eats the wrong side's work. Those
+    # go to the user as a list instead.
+    #
+    # A tie on time with different sizes is NOT "same" either - one side clearly
+    # changed without its timestamp moving, and we cannot tell which.
+    if ($srcBytes -eq $dstBytes -and $srcMs -eq $dstMs) { return 'keep' }
+    if ($srcBytes -gt $dstBytes -and $srcMs -gt $dstMs) { return 'push' }
+    if ($srcBytes -lt $dstBytes -and $srcMs -lt $dstMs) { return 'keep' }
+    return 'ask'
+}
+
+function Get-SyncPlan([string]$name, [string]$product) {
+    # Read-only survey of what a time-based sync would do. Never writes anything.
+    # Used both by the restore dialog (to show counts before the user commits)
+    # and by Restore-Backup itself, so the list the user saw is the list that
+    # gets applied.
+    $dir = Join-Path $BackupsDir $name
+    if (-not (Test-Path -LiteralPath $dir)) { throw 'backup_missing' }
+
+    $out = [pscustomobject]@{
+        push       = @()   # backup copy is bigger AND newer -> will overwrite
+        keep       = @()   # identical -> untouched
+        conflicts  = @()   # caller must decide
+        backupOnly = @()   # not present locally -> gets added
+        total      = 0
+        hasBackupDb = $false
+    }
+
+    # --- the backup side: read its database, not its manifest ---
+    $srcRows = New-Object System.Collections.Generic.List[object]
+    if (Test-Path -LiteralPath (Join-Path $dir 'workbuddy.db')) {
+        $out.hasBackupDb = $true
+        $stage = $null
+        try {
+            $stage = New-StagedDb $dir
+            $stageDb = Join-Path $stage 'workbuddy.db'
+            foreach ($r in (Get-DbSessionsAt $stageDb)) { $srcRows.Add($r) }
+        } catch {
+            Write-Log ('sync plan: backup db unreadable: ' + $_.Exception.Message)
+        } finally { Remove-StagedDb $stage }
+    }
+
+    # --- the local side ---
+    $local = @{}
+    foreach ($s in (Get-SessionsIndex $product -IncludeDeleted)) { $local[[string]$s.id] = $s }
+
+    # Transcript sizes inside the backup. A session's "size" has to mean the same
+    # thing on both sides or the comparison is meaningless: Get-SessionsIndex
+    # counts the .jsonl plus its rollback file plus any attachment folder, so the
+    # backup side counts exactly the same three things.
+    $srcProj = Join-Path $dir 'projects'
+    foreach ($row in $srcRows) {
+        $sid = [string]$row.id
+        $out.total++
+        $srcBytes = [long]0
+        $srcSlug = ''
+        if (Test-Path -LiteralPath $srcProj) {
+            foreach ($slugDir in @(Get-ChildItem -LiteralPath $srcProj -Directory -ErrorAction SilentlyContinue)) {
+                $cand = Join-Path $slugDir.FullName ($sid + '.jsonl')
+                if (Test-Path -LiteralPath $cand) {
+                    $srcSlug = $slugDir.Name
+                    $srcBytes += (Get-Item -LiteralPath $cand).Length
+                    $rb = Join-Path $slugDir.FullName ($sid + '.file-rollback.ndjson')
+                    if (Test-Path -LiteralPath $rb) { $srcBytes += (Get-Item -LiteralPath $rb).Length }
+                    $att = Join-Path $slugDir.FullName $sid
+                    if (Test-Path -LiteralPath $att) { $srcBytes += (Get-FolderSize $att) }
+                    break
+                }
+            }
+        }
+        $srcMs = [long]$row.updatedMs
+
+        $entry = [pscustomobject]@{
+            id         = $sid
+            title      = [string]$row.title
+            slug       = $srcSlug
+            srcBytes   = $srcBytes
+            srcMs      = $srcMs
+            srcAt      = [string]$row.updatedAt
+            dstBytes   = [long]0
+            dstMs      = [long]0
+            dstAt      = ''
+            verdict    = ''
+        }
+        if (-not $local.ContainsKey($sid)) {
+            $entry.verdict = 'add'
+            $out.backupOnly = @($out.backupOnly) + $entry
+            continue
+        }
+        $l = $local[$sid]
+        $entry.dstBytes = [long]$l.bytes
+        $entry.dstMs = [long]$l.updatedMs
+        $entry.dstAt = [string]$l.updatedAt
+        $entry.verdict = Compare-SyncCandidate $srcBytes $srcMs ([long]$l.bytes) ([long]$l.updatedMs)
+        switch ($entry.verdict) {
+            'push' { $out.push = @($out.push) + $entry }
+            'keep' { $out.keep = @($out.keep) + $entry }
+            default { $out.conflicts = @($out.conflicts) + $entry }
+        }
+    }
+    return $out
+}
+
+
+function Merge-DbSessions([string]$product, [string]$srcDbPath, $UpdateIds = $null) {
     # "Fill in what is missing" for the database: copy the rows that the target
     # does not have yet, leave everything else alone.
     # The two editions may not be on the same schema version, so only the columns
     # that exist on both sides are copied - a missing column simply keeps its
     # default instead of blowing up the whole restore.
+    #
+    # -UpdateIds turns it into a sync: the rows in that set are refreshed from the
+    # backup even though the target already has an id-equal row. Rows outside the
+    # set keep the old insert-only behaviour, and nothing is ever deleted either
+    # way. Returns insert/update/unchanged counts so the caller can report what
+    # actually happened instead of guessing.
     $db = Open-WbDatabase $product
     try {
         $dstCols = @([WbSqlite]::Query($db, 'PRAGMA table_info(sessions)', $null) | ForEach-Object { [string]$_['name'] })
@@ -720,10 +3701,55 @@ function Merge-DbSessions([string]$product, [string]$srcDbPath) {
             $common = @($dstCols | Where-Object { $srcCols -contains $_ })
             if (-not $common.Count) { throw 'no_common_columns' }
             $colList = ($common | ForEach-Object { '"' + $_ + '"' }) -join ', '
+            $inserted = 0
+            $updated = 0
+            $unchanged = 0
             [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
             try {
-                $n = [WbSqlite]::Exec($db,
+                # 1. everything the target does not have yet
+                $inserted = [WbSqlite]::Exec($db,
                     ("INSERT OR IGNORE INTO sessions ({0}) SELECT {0} FROM src.sessions" -f $colList), $null)
+
+                if ($null -ne $UpdateIds) {
+                    # 2. the rows the sync chose to overwrite: delete the local
+                    #    copy, then take the backup's. DELETE + INSERT rather
+                    #    than UPDATE ... FROM because the latter needs SQLite
+                    #    3.33+, and winsqlite3.dll is whatever the OS shipped -
+                    #    on older Windows that statement would simply be a
+                    #    syntax error. Both statements run inside the same
+                    #    transaction, so the delete can never be left dangling.
+                    #
+                    # Identifiers come from PRAGMA (never user input); the id
+                    # values are bound as parameters.
+                    $ids = @()
+                    foreach ($k in $UpdateIds.Keys) { $s = [string]$k; if ($s) { $ids += $s } }
+                    if ($ids.Count -gt 0) {
+                        # Chunked: one statement per few hundred ids, so a big
+                        # account does not hit SQLite's variable limit and the
+                        # statement stays reusable within a chunk.
+                        $chunk = 400
+                        for ($i = 0; $i -lt $ids.Count; $i += $chunk) {
+                            $tail = @($ids[$i..([Math]::Min($i + $chunk - 1, $ids.Count - 1))])
+                            $ph = @()
+                            for ($k = 0; $k -lt $tail.Count; $k++) { $ph += ('?{0}' -f ($k + 1)) }
+                            $inList = ($ph -join ', ')
+                            $updated += [WbSqlite]::Exec($db,
+                                ("DELETE FROM sessions WHERE id IN ({0}) AND EXISTS (SELECT 1 FROM src.sessions WHERE src.sessions.id = sessions.id)" -f $inList),
+                                $tail)
+                            [void][WbSqlite]::Exec($db,
+                                ("INSERT INTO sessions ({0}) SELECT {0} FROM src.sessions WHERE id IN ({1})" -f $colList, $inList),
+                                $tail)
+                        }
+                    }
+                    # 3. how many local rows were left untouched.
+                    # The count is taken BEFORE the insert above would be
+                    # counted in: rows that already existed and were not in the
+                    # push set. Counting after the insert made brand-new rows
+                    # look like "unchanged", which contradicted the dialog.
+                    $chk2 = @([WbSqlite]::Query($db, ("SELECT count(*) AS n FROM sessions WHERE id IN (SELECT id FROM src.sessions)"), $null))
+                    if ($chk2.Count) { $unchanged = [int]$chk2[0]['n'] - $updated - $inserted }
+                    if ($unchanged -lt 0) { $unchanged = 0 }
+                }
                 [void][WbSqlite]::Exec($db, 'COMMIT', $null)
             } catch {
                 [void][WbSqlite]::Exec($db, 'ROLLBACK', $null)
@@ -732,8 +3758,11 @@ function Merge-DbSessions([string]$product, [string]$srcDbPath) {
             [void][WbSqlite]::Query($db, 'PRAGMA wal_checkpoint(TRUNCATE)', $null)
             $chk = [WbSqlite]::Query($db, 'PRAGMA integrity_check', $null)
             if (-not $chk.Count -or [string]$chk[0]['integrity_check'] -ne 'ok') { throw 'integrity_check_failed' }
-            Write-Log ("db merge: {0} rows inserted from {1}" -f $n, $srcDbPath)
-            return $n
+            Write-Log ("db merge: {0} rows inserted from {1} (updated={2})" -f $inserted, $srcDbPath, $updated)
+            if ($null -ne $UpdateIds) {
+                return [pscustomobject]@{ inserted = $inserted; updated = $updated; unchanged = $unchanged }
+            }
+            return $inserted
         } finally {
             try { [void][WbSqlite]::Exec($db, 'DETACH DATABASE src', $null) } catch { }
         }
@@ -1051,13 +4080,16 @@ function Invoke-RecoverSessions([string]$product, [string[]]$ids, [bool]$Backup 
 
     # A FULL backup, not just the database: if the change turns out wrong you want
     # the transcript files and the account snapshots back as well, not a lone .db.
+    # Aborts on failure for the same reason as the purge above: the user asked
+    # for this safety net, and recovering rewrites ownership in the database.
     $snapName = ''
     if ($Backup) {
         try {
             $m = New-Backup $true 'pre-recover' '' $product
             if ($m) { $snapName = [string]$m.name }
         } catch {
-            Write-Log ('pre-recover backup failed: ' + $_.Exception.Message)
+            Write-Log ('pre-recover backup failed, aborting: ' + $_.Exception.Message)
+            throw ('backup_failed: ' + (Get-ErrMessage $_.Exception))
         }
     }
 
@@ -1295,13 +4327,21 @@ function Invoke-PurgeSessions([string]$product, [string[]]$ids, [bool]$Backup = 
 
     # A FULL backup first, same as a restore: a lone .db would not bring the
     # transcripts back if the wrong rows were ticked.
+    #
+    # A failed backup ABORTS THE WHOLE PURGE. The user ticked the backup-first box
+    # themselves, so the safety net is what they asked for - going on to delete
+    # rows and transcripts would destroy data they believed was covered, and
+    # nothing can bring it back. Nothing destructive has happened at this point
+    # (the client was closed, nothing else), so stopping is safe; the user can
+    # untick the box if they really want to delete without a backup.
     $snapName = ''
     if ($Backup) {
         try {
             $m = New-Backup $true 'pre-purge' '' $product
             if ($m) { $snapName = [string]$m.name }
         } catch {
-            Write-Log ('pre-purge backup failed: ' + $_.Exception.Message)
+            Write-Log ('pre-purge backup failed, aborting: ' + $_.Exception.Message)
+            throw ('backup_failed: ' + (Get-ErrMessage $_.Exception))
         }
     }
 
@@ -2299,13 +5339,37 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
     # safety net: snapshot the current state first.
     # A cross edition restore always takes one, even in merge mode, because it may
     # mix data from two different clients.
+    # Sync mode takes one too, unconditionally: it OVERWRITES conversations that
+    # exist locally, so it is as destructive as a full restore even though it
+    # leaves the conversations it did not pick alone.
+    # A failed snapshot ABORTS: everything after this point overwrites or merges
+    # into workbuddy.db and copies files in. Restoring is the one operation the
+    # user cannot hand-undo, so it must not proceed without the rollback point it
+    # was promised. Nothing has been touched yet, so stopping here is clean.
     $pre = $null
-    if ($mode -eq 'full' -or $crossEdition) {
-        try { $pre = New-Backup ([bool]$mf.includeAttachments) 'pre-restore' '' $product } catch { Write-Log ('pre-restore backup failed: ' + $_.Exception.Message) }
+    if ($mode -eq 'full' -or $mode -eq 'sync' -or $crossEdition) {
+        try {
+            $pre = New-Backup ([bool]$mf.includeAttachments) 'pre-restore' '' $product
+        } catch {
+            Write-Log ('pre-restore backup failed, aborting: ' + $_.Exception.Message)
+            throw ('backup_failed: ' + (Get-ErrMessage $_.Exception))
+        }
     }
 
     $restored = 0
     $merged = 0
+    $syncPushed = 0
+    $syncKept = 0
+    $syncAdded = 0
+    # In sync mode the set of conversations to overwrite is decided BEFORE
+    # anything is written, from the same survey the dialog showed the user.
+    $syncPushIds = @{}
+    $syncConflictIds = @{}
+    if ($mode -eq 'sync') {
+        $plan = Get-SyncPlan $name $product
+        foreach ($e in @($plan.push))      { $syncPushIds[[string]$e.id] = $true }
+        foreach ($e in @($plan.conflicts)) { $syncConflictIds[[string]$e.id] = $true }
+    }
     $remapDone = $false
     $remapReason = ''
     $hasWal = (Test-Path -LiteralPath (Join-Path $dir 'workbuddy.db-wal'))
@@ -2342,6 +5406,15 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                 Remove-Item -LiteralPath ($dbDst + '-wal') -Force -ErrorAction SilentlyContinue
                 Remove-Item -LiteralPath ($dbDst + '-shm') -Force -ErrorAction SilentlyContinue
                 Copy-Item -LiteralPath $stageDb -Destination $dbDst -Force
+            } elseif ($mode -eq 'sync') {
+                # Rows the plan decided to push get refreshed from the backup;
+                # rows it kept or left to the user stay exactly as they are, and
+                # nothing is ever removed - a sync that deleted local rows would
+                # be a full restore wearing a different name.
+                $syncRes = Merge-DbSessions $product $stageDb -UpdateIds $syncPushIds
+                $merged = [int]$syncRes.inserted
+                $syncPushed = [int]$syncRes.updated
+                $syncKept = [int]$syncRes.unchanged
             } else {
                 $merged = Merge-DbSessions $product $stageDb
             }
@@ -2364,12 +5437,35 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
             foreach ($f in @(Get-ChildItem -LiteralPath $slugDir.FullName -File -ErrorAction SilentlyContinue)) {
                 $target = Join-Path $dst $f.Name
                 if ($mode -eq 'merge' -and (Test-Path -LiteralPath $target)) { continue }
+                if ($mode -eq 'sync') {
+                    # Only overwrite the transcripts belonging to a conversation
+                    # the plan decided to push. A conflict goes untouched: the
+                    # user explicitly chose to leave it alone, and replacing the
+                    # file behind their back would make that choice a lie.
+                    # Files of backup-only conversations are not listed in
+                    # syncPushIds, but they are not present locally either, so
+                    # the "target exists" guard below lets them through.
+                    $base = [IO.Path]::GetFileNameWithoutExtension($f.Name)
+                    $sid = $base
+                    if ($base.EndsWith('.file-rollback')) { $sid = $base.Substring(0, $base.Length - '.file-rollback'.Length) }
+                    if ((Test-Path -LiteralPath $target) -and -not $syncPushIds.ContainsKey($sid)) { continue }
+                }
                 Copy-Item -LiteralPath $f.FullName -Destination $target -Force
                 $restored++
             }
             foreach ($sd in @(Get-ChildItem -LiteralPath $slugDir.FullName -Directory -ErrorAction SilentlyContinue)) {
                 $target = Join-Path $dst $sd.Name
                 if ($mode -eq 'merge' -and (Test-Path -LiteralPath $target)) { continue }
+                if ($mode -eq 'sync') {
+                    # The attachment folder is named after the session id, and it
+                    # needs the SAME filter the transcript loop above applies:
+                    # without it a "keep" or "conflict" session had its
+                    # attachments merged in even though the dialog promised that
+                    # conversation would be left alone. A backup-only session is
+                    # not in syncPushIds but is not present locally either, so
+                    # the "target exists" guard still lets it through.
+                    if ((Test-Path -LiteralPath $target) -and -not $syncPushIds.ContainsKey($sd.Name)) { continue }
+                }
                 Copy-Tree $sd.FullName $target
             }
         }
@@ -2385,6 +5481,7 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
             if (-not (Test-Path -LiteralPath $dstU)) { New-Item -ItemType Directory -Path $dstU -Force | Out-Null }
             $dstSnap = Join-Path $dstU 'sidebar-list-snapshot.json'
             if ($mode -eq 'merge' -and (Test-Path -LiteralPath $dstSnap)) { continue }
+            if ($mode -eq 'sync' -and (Test-Path -LiteralPath $dstSnap)) { continue }
             Copy-Item -LiteralPath $snap -Destination $dstSnap -Force
         }
     }
@@ -2394,7 +5491,7 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
 
     # Deliberately NOT restarting the client here: the page asks the user whether
     # to open it, and only starts it if they say yes.
-    Write-Log ("restore done: {0} edition={1} from={2} cross={3} mode={4} files={5} merged={6} remap={7}" -f $name, $product, $sourceEdition, $crossEdition, $mode, $restored, $merged, $remapDone)
+    Write-Log ("restore done: {0} edition={1} from={2} cross={3} mode={4} files={5} merged={6} remap={7} pushed={8} kept={9}" -f $name, $product, $sourceEdition, $crossEdition, $mode, $restored, $merged, $remapDone, $syncPushed, $syncKept)
     return [pscustomobject]@{
         ok            = $true
         mode          = $mode
@@ -2404,6 +5501,9 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
         home          = $edHome
         files         = $restored
         merged        = $merged
+        syncPushed    = $syncPushed
+        syncKept      = $syncKept
+        syncConflicts = $syncConflictIds.Count
         sessions      = @($mf.sessions).Count
         remapDone     = $remapDone
         remapReason   = $remapReason
@@ -2795,11 +5895,64 @@ function Invoke-Api([string]$path, $query, $req) {
             return [pscustomobject]@{ ok = $true; backup = $meta }
         }
 
+        '/api/backup/sync-plan' {
+            # Read-only: what would "sync by time" do to this backup? The dialog
+            # shows the counts (and the conflict list) BEFORE the user commits,
+            # and Restore-Backup recomputes the same plan so what was shown is
+            # what gets applied.
+            $name = ''
+            if ($body) { $name = [string]$body.name }
+            $target = ''
+            if ($body -and $body.target) { $target = [string]$body.target }
+            if (-not $name) { throw 'name_required' }
+            $dir = Join-Path $BackupsDir $name
+            if (-not (Test-Path -LiteralPath $dir)) { throw 'backup_missing' }
+            $mf = Read-JsonFile (Join-Path $dir 'manifest.json')
+            $ed = $target
+            if (-not (Test-Edition $ed)) {
+                if ($mf -and $mf.edition) { $ed = [string]$mf.edition }
+                if (-not (Test-Edition $ed)) { $ed = Get-ActiveEdition }
+            }
+            $plan = Get-SyncPlan $name $ed
+            # Only what the dialog needs: id, title, both sides' size/time. The
+            # n/m lists can be long, so they are truncated here rather than in
+            # the renderer.
+            $mk = {
+                param($arr, $max)
+                $o = New-Object System.Collections.Generic.List[object]
+                $i = 0
+                foreach ($e in @($arr)) {
+                    if ($i -ge $max) { break }
+                    $o.Add([pscustomobject]@{
+                        id = $e.id; title = $e.title
+                        srcBytes = $e.srcBytes; dstBytes = $e.dstBytes
+                        srcAt = $e.srcAt; dstAt = $e.dstAt
+                    })
+                    $i++
+                }
+                return ,$o.ToArray()
+            }
+            return [pscustomobject]@{
+                ok          = $true
+                edition     = $ed
+                hasBackupDb = $plan.hasBackupDb
+                total       = $plan.total
+                pushCount   = @($plan.push).Count
+                keepCount   = @($plan.keep).Count
+                addCount    = @($plan.backupOnly).Count
+                conflictCount = @($plan.conflicts).Count
+                push        = & $mk $plan.push 200
+                conflicts   = & $mk $plan.conflicts 200
+                backupOnly  = & $mk $plan.backupOnly 200
+            }
+        }
+
         '/api/backup/restore' {
             $name = ''
             if ($body) { $name = [string]$body.name }
             $mode = 'full'
             if ($body -and $body.mode) { $mode = [string]$body.mode }
+            if ($mode -notin @('full', 'merge', 'sync')) { throw 'bad_mode' }
             $remap = $false
             if ($body -and $null -ne $body.remap) { $remap = [bool]$body.remap }
             $target = ''
@@ -2812,10 +5965,22 @@ function Invoke-Api([string]$path, $query, $req) {
             $name = ''
             if ($body) { $name = [string]$body.name }
             if (-not $name) { throw 'name_required' }
+            # The name must be ONE leaf folder name. Without this, "." resolves to
+            # $BackupsDir itself and "..\backups2" resolves to a sibling that still
+            # starts with the backups path - both passed the old containment check
+            # below, and the first one would Remove-Item -Recurse every backup.
+            if ($name -ne [IO.Path]::GetFileName($name) -or $name -eq '.' -or $name -eq '..') {
+                throw 'invalid_path'
+            }
+            if ($name.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) { throw 'invalid_path' }
             $dir = Join-Path $BackupsDir $name
             if (-not (Test-Path -LiteralPath $dir)) { throw 'backup_missing' }
             $full = [IO.Path]::GetFullPath($dir)
-            if (-not $full.StartsWith([IO.Path]::GetFullPath($BackupsDir))) { throw 'invalid_path' }
+            # Strictly INSIDE the backups root: the trailing separator is what
+            # stops a sibling like "backups2" from matching, and the comparison
+            # must be case-insensitive on Windows.
+            $rootFull = [IO.Path]::GetFullPath($BackupsDir).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+            if (-not $full.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) { throw 'invalid_path' }
             $delErr = $null
             try { Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop } catch { $delErr = $_ }
             if (Test-Path -LiteralPath $full) { throw ('delete_failed: ' + (Get-ErrMessage $delErr)) }
@@ -2993,6 +6158,467 @@ function Invoke-Api([string]$path, $query, $req) {
             return [pscustomobject]@{ ok = $true; product = $product; uid = $uid; nickname = $v }
         }
 
+        '/api/models/groups' {
+            # The tab bar: every models.json* file in the edition home, with the
+            # title stored inside each one.
+            $edition = ''
+            if ($query.ContainsKey('edition')) { $edition = $query['edition'] }
+            if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+            $g = Get-ModelGroups $edition
+            return [pscustomobject]@{ ok = $true; edition = $edition; groups = @($g) }
+        }
+
+        '/api/models/group-switch' {
+            $edition = ''
+            $file = ''
+            if ($body) {
+                $edition = [string]$body.edition
+                $file = [string]$body.file
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            $moved = Switch-ModelGroup $edition $file
+            $g = Get-ModelGroups $edition
+            return [pscustomobject]@{ ok = $true; edition = $edition; moved = $moved; groups = @($g) }
+        }
+
+        '/api/models/group-new' {
+            $edition = ''
+            if ($body) { $edition = [string]$body.edition }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            $made = New-ModelGroup $edition
+            $g = Get-ModelGroups $edition
+            return [pscustomobject]@{ ok = $true; edition = $edition; made = $made; groups = @($g) }
+        }
+
+        '/api/models/group-title' {
+            $edition = ''
+            $file = ''
+            $title = ''
+            if ($body) {
+                $edition = [string]$body.edition
+                $file = [string]$body.file
+                $title = [string]$body.title
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            $ren = Set-ModelGroupTitle $edition $file $title
+            $g = Get-ModelGroups $edition
+            return [pscustomobject]@{ ok = $true; edition = $edition; renamed = $ren; groups = @($g) }
+        }
+
+        '/api/models/group-delete' {
+            # Delete ONE parked group file. The active models.json is refused:
+            # it is the file the client reads, and removing it would leave the
+            # client with no custom models at all - "switch to another group,
+            # then delete this one" is the safe order and the UI simply does not
+            # offer delete on the active tab.
+            $edition = ''
+            $file = ''
+            if ($body) {
+                $edition = [string]$body.edition
+                $file = [string]$body.file
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            if (-not $file) { throw 'group_required' }
+            if ($file -eq 'models.json') { throw 'group_is_active' }
+            if ($file -ne [IO.Path]::GetFileName($file)) { throw 'bad_group_name' }
+            if (-not (Test-GroupFile $file)) { throw 'bad_group_name' }
+            $dir = Get-EditionHome $edition
+            $p = Join-Path $dir $file
+            if (-not (Test-Path -LiteralPath $p)) { throw 'group_not_found' }
+            # Same containment rule as the backup delete: the resolved path has
+            # to sit strictly inside the edition home, so a crafted name cannot
+            # reach a sibling or a parent directory.
+            $full = [IO.Path]::GetFullPath($p)
+            $rootFull = [IO.Path]::GetFullPath($dir).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+            if (-not $full.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) { throw 'invalid_path' }
+            $delErr = $null
+            try { Remove-Item -LiteralPath $full -Force -ErrorAction Stop } catch { $delErr = $_ }
+            if (Test-Path -LiteralPath $full) { throw ('delete_failed: ' + (Get-ErrMessage $delErr)) }
+            Write-Log ("models group delete: {0} {1}" -f $edition, $file)
+            $g = Get-ModelGroups $edition
+            return [pscustomobject]@{ ok = $true; edition = $edition; deleted = $file; groups = @($g) }
+        }
+
+        '/api/models/group-test' {
+            # "Test" on a model-file tab. Probes the models in ONE models file,
+            # each against its own url / key (see Test-ModelGroupChat - this is
+            # NOT the batch-import probe, which shares a single endpoint).
+            #
+            # $body.file selects the file and defaults to the active
+            # models.json; a parked group works too, since the user may want to
+            # check a set of models before switching to it.
+            $edition = ''
+            $file = ''
+            $ids = @()
+            $concurrency = 8
+            if ($body) {
+                $edition = [string]$body.edition
+                $file = [string]$body.file
+                $ids = $body.ids
+                if ($null -ne $body.PSObject.Properties['concurrency']) { $concurrency = [int]$body.concurrency }
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            if (-not $file) { $file = 'models.json' }
+            if ($file -ne [IO.Path]::GetFileName($file)) { throw 'bad_group_name' }
+            if (-not (Test-GroupFile $file)) { throw 'bad_group_name' }
+            $r = Test-ModelGroupChat $edition $file $ids $concurrency
+            if (-not $r.ok) { throw $r.error }
+            return [pscustomobject]@{ ok = $true; file = $file; total = $r.total; results = $r.results }
+        }
+
+        '/api/models/repair' {
+            # Bring an existing file in line with the client's own rule: one
+            # visible entry per id. Earlier same-id twins are hidden (renamed to
+            # "-id"), never deleted. Used by the model page on load, so a file
+            # that already had clashes is fixed the moment it is opened.
+            $edition = ''
+            if ($body) { $edition = [string]$body.edition }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            $r = Repair-ModelDuplicates $edition
+            Write-Log ("models repair: {0} changed={1} hid={2}" -f $edition, $r.changed, (@($r.hidden)).Count)
+            return $r
+        }
+
+        '/api/models/list' {
+            $edition = ''
+            if ($query.ContainsKey('edition')) { $edition = $query['edition'] }
+            if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+            $r = Get-ModelsList $edition
+            return [pscustomobject]@{
+                ok      = $true
+                edition = $edition
+                path    = $r.path
+                exists  = $r.exists
+                loadable = $r.ok
+                code    = $(if ($r.ok) { '' } else { $r.code })
+                count   = $r.count
+                models  = $r.models
+            }
+        }
+
+        '/api/models/batch-list' {
+            # Batch import, step 1: the user gave only an endpoint and a key, so
+            # work out the listing address from them. Like the "pick a model"
+            # dialog this walks the SAME candidate list (Get-ModelProbeUrlCandidates);
+            # it just keeps going until one answers instead of stopping at the
+            # first, because here the user pasted a bare origin and expects the
+            # tool to work the rest out. Which ones were tried, and which
+            # answered, are both reported.
+            #
+            # There is no useCustomProtocol switch on this dialog, so none is
+            # read here: that flag governs the CHAT address only.
+            $url = ''
+            $apiKey = ''
+            if ($body) {
+                $url = [string]$body.url
+                $apiKey = [string]$body.apiKey
+            }
+            if (-not $url.Trim()) { throw 'url_required' }
+            if (-not $apiKey) { throw 'key_required' }
+            $r = Get-ModelListWithFallback $url $apiKey $false
+            Write-Log ("models batch-list: ok={0} used={1} tried={2} count={3}" -f `
+                       $r.ok, $r.usedUrl, $r.tried.Count, $r.models.Count)
+            # Say up-front whether model.csv exists, so the dialog can tell the
+            # user where the gaps will be filled from before they save.
+            $csv = Import-ModelCsv
+            return [pscustomobject]@{
+                ok      = $r.ok
+                status  = $r.status
+                code    = $r.code
+                message = $r.message
+                usedUrl = $r.usedUrl
+                tried   = $r.tried
+                count   = $r.models.Count
+                models  = $r.models
+                csvOk   = $csv.ok
+                csvPath = $csv.path
+                csvRows = @($csv.rows).Count
+            }
+        }
+
+        '/api/models/batch-test' {
+            # Batch import, step 2: probe a list of ids with the same minimal
+            # chat request, several at a time.
+            $url = ''
+            $apiKey = ''
+            $ids = @()
+            $useCustom = $false
+            $concurrency = 4
+            if ($body) {
+                $url = [string]$body.url
+                $apiKey = [string]$body.apiKey
+                $ids = $body.ids
+                if ($null -ne $body.PSObject.Properties['useCustomProtocol']) { $useCustom = [bool]$body.useCustomProtocol }
+                if ($null -ne $body.PSObject.Properties['concurrency']) { $concurrency = [int]$body.concurrency }
+            }
+            if (-not $url.Trim()) { throw 'url_required' }
+            if (-not $apiKey) { throw 'key_required' }
+            $r = Test-ModelBatch $url $apiKey $ids $useCustom $concurrency
+            if (-not $r.ok) { throw $r.error }
+            $okCount = 0
+            foreach ($x in $r.results) { if ($x.ok) { $okCount++ } }
+            Write-Log ("models batch-test: total={0} ok={1} chatUrl={2}" -f $r.results.Count, $okCount, $r.chatUrl)
+            return [pscustomobject]@{
+                ok      = $true
+                chatUrl = $r.chatUrl
+                triedChat = $r.triedChat
+                total   = $r.results.Count
+                okCount = $okCount
+                results = $r.results
+            }
+        }
+
+        '/api/models/batch-save' {
+            # Batch import, step 3: build one full entry per selected id, all
+            # sharing the same url / apiKey, with the note the user typed as name.
+            $edition = ''
+            $url = ''
+            $apiKey = ''
+            $items = @()
+            $icon = ''
+            if ($body) {
+                $edition = [string]$body.edition
+                $url = [string]$body.url
+                $apiKey = [string]$body.apiKey
+                $items = $body.items
+                $icon = [string]$body.icon
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            if (-not $url.Trim()) { throw 'url_required' }
+            if (-not $apiKey) { throw 'key_required' }
+
+            # Capability values come from three places, in this order:
+            #   1. what the listing reported (it knows the real model)
+            #   2. model.csv, matched by id - exact first, then wildcard
+            #   3. built-in defaults
+            # The CSV is read once for the whole batch, not once per model.
+            $csv = Import-ModelCsv
+            $csvRows = @($csv.rows)
+            $mbDefaults = Get-ModelCsvDefaults
+
+            $added = New-Object System.Collections.Generic.List[string]
+            $skipped = New-Object System.Collections.Generic.List[object]
+            $hidSiblings = New-Object System.Collections.Generic.List[string]
+            foreach ($it in (To-ItemArray $items)) {
+                if ($null -eq $it) { continue }
+                $mid = ([string](Get-ModelProp $it 'id')).Trim()
+                if (-not $mid) { continue }
+                $nm = [string](Get-ModelProp $it 'name')
+                $patch = [pscustomobject]@{
+                    id               = $mid
+                    name             = $nm
+                    url              = $url.Trim()
+                    apiKey           = $apiKey
+                    useCustomProtocol = $false
+                }
+
+                # ---- capabilities: listing > csv > defaults ----
+                $row = $null
+                if ($csvRows.Count -gt 0) { $row = Find-ModelCsvRow $csvRows $mid }
+
+                # supportsToolCall: the listing has no field for it, so it is
+                # csv-then-default.
+                $tool = $mbDefaults.supportsToolCall
+                if ($row -and $row.ContainsKey('Tool')) { $tool = ConvertTo-CsvBool $row['Tool'] $tool }
+                $patch | Add-Member -NotePropertyName supportsToolCall -NotePropertyValue $tool -Force
+
+                # supportsImages: listing wins when it spoke (input_modalities).
+                $imgSet = $false
+                $img = $mbDefaults.supportsImages
+                $pv = Get-ModelProp $it 'supportsImages'
+                if ($null -ne $pv) { $img = [bool]$pv; $imgSet = $true }
+                $sv = Get-ModelProp $it 'supportsImagesSet'
+                if ($null -ne $sv -and [bool]$sv) { $imgSet = $true }
+                if (-not $imgSet -and $row -and $row.ContainsKey('Images')) {
+                    $img = ConvertTo-CsvBool $row['Images'] $img
+                }
+                $patch | Add-Member -NotePropertyName supportsImages -NotePropertyValue $img -Force
+
+                # supportsReasoning / efforts: listing wins when it listed levels.
+                $efforts = @($mbDefaults.supportedEfforts)
+                $defEff = $mbDefaults.defaultEffort
+                $reason = $mbDefaults.supportsReasoning
+                $lv = Get-ModelProp $it 'supportedEfforts'
+                $fromListing = $false
+                if ($null -ne $lv) {
+                    $got = @()
+                    foreach ($e in (To-ItemArray $lv)) {
+                        $s = ([string]$e).Trim()
+                        if ($s) { $got += $s }
+                    }
+                    if ($got.Count -gt 0) { $efforts = $got; $reason = $true; $fromListing = $true }
+                }
+                if (-not $fromListing -and $row) {
+                    if ($row.ContainsKey('Think')) { $reason = ConvertTo-CsvBool $row['Think'] $reason }
+                    if ($row.ContainsKey('Effort')) {
+                        $ce = @(ConvertTo-CsvEfforts $row['Effort'])
+                        if ($ce.Count -gt 0) { $efforts = $ce }
+                    }
+                }
+                $dv = Get-ModelProp $it 'defaultEffort'
+                if ($null -ne $dv -and ([string]$dv).Trim()) { $defEff = ([string]$dv).Trim() }
+                elseif ($row -and $row.ContainsKey('Default')) {
+                    $one = ConvertTo-CsvEffortOne $row['Default']
+                    if ($one) { $defEff = $one }
+                }
+                # An effort list the user disabled entirely means "no reasoning".
+                if (-not $reason) { $efforts = @(); $defEff = '' }
+                # The default must be one of the supported levels or the client
+                # would show a default it cannot select.
+                if ($defEff -and (@($efforts) -notcontains $defEff)) {
+                    if (@($efforts).Count -gt 0) { $defEff = [string]@($efforts)[0] } else { $defEff = '' }
+                }
+                $patch | Add-Member -NotePropertyName supportsReasoning -NotePropertyValue $reason -Force
+                $patch | Add-Member -NotePropertyName supportedEfforts -NotePropertyValue @($efforts) -Force
+                $patch | Add-Member -NotePropertyName defaultEffort -NotePropertyValue $defEff -Force
+
+                # ---- context length: listing > csv, and 0 means "do not write" ----
+                $inTok = 0
+                $iv = Get-ModelProp $it 'maxInputTokens'
+                if ($null -ne $iv) { try { $inTok = [long]$iv } catch { $inTok = 0 } }
+                if ($inTok -le 0 -and $row -and $row.ContainsKey('Ctx')) {
+                    $inTok = ConvertTo-CsvTokens $row['Ctx']
+                }
+                $outTok = 0
+                $ov = Get-ModelProp $it 'maxOutputTokens'
+                if ($null -ne $ov) { try { $outTok = [long]$ov } catch { $outTok = 0 } }
+                if ($inTok -gt 0) { $patch | Add-Member -NotePropertyName maxInputTokens -NotePropertyValue $inTok -Force }
+                if ($outTok -gt 0) { $patch | Add-Member -NotePropertyName maxOutputTokens -NotePropertyValue $outTok -Force }
+
+                # ---- hidden ----
+                $hid = $mbDefaults.hidden
+                if ($row -and $row.ContainsKey('Hidden')) { $hid = ConvertTo-CsvBool $row['Hidden'] $hid }
+                if ($hid) { $patch | Add-Member -NotePropertyName hidden -NotePropertyValue $true -Force }
+
+                # Each id carries its own vendor so the icon the importer drew
+                # next to the name is the one that survives into the file. A
+                # single shared icon would stamp the same logo on every model,
+                # which is exactly what the batch list no longer does.
+                #
+                # Order:
+                #   1. what the UI computed for this row (it already applied the
+                #      listing's own value and its icon rules)
+                #   2. the explicit model.csv "icon" column - the user's own
+                #      override, which is why it beats the name-derived guess
+                #   3. a guess derived from the name / id
+                #   4. the legacy single-value icon field
+                #
+                # The csv column sits ABOVE the guess on purpose: someone who
+                # bothered to write "GLM API" next to a model whose name gives
+                # nothing away means it, and the guess is exactly the thing they
+                # were working around.
+                $vendor = [string](Get-ModelProp $it 'vendor')
+                $fromCsvIcon = ''
+                if ($row -and $row.ContainsKey('Icon')) { $fromCsvIcon = ([string]$row['Icon']).Trim() }
+                if (-not $vendor -or $vendor -eq 'Custom') {
+                    if ($fromCsvIcon) { $vendor = $fromCsvIcon }
+                    elseif (-not $vendor) { $vendor = Get-ModelVendorHint $mid $nm }
+                }
+                if ((-not $vendor -or $vendor -eq 'Custom') -and $icon) { $vendor = $icon }
+                if ($vendor) { $patch | Add-Member -NotePropertyName vendor -NotePropertyValue $vendor -Force }
+                try {
+                    # create=$true always: importing an id that already exists adds
+                    # a new entry and hides the old one (see Save-ModelEntry), it
+                    # does not overwrite and does not get skipped.
+                    $rr = Save-ModelEntry $edition $mid $patch $true
+                    $added.Add($mid)
+                    foreach ($h in (To-ItemArray $rr.hiddenSiblings)) { $hidSiblings.Add([string]$h) }
+                } catch {
+                    $skipped.Add([pscustomobject]@{ id = $mid; reason = $_.Exception.Message })
+                }
+            }
+            Write-Log ("models batch-save: added={0} skipped={1} hidSiblings={2}" -f `
+                       $added.Count, $skipped.Count, $hidSiblings.Count)
+            $after = Get-ModelsList $edition
+            return [pscustomobject]@{
+                ok             = $true
+                added          = $added.ToArray()
+                skipped        = $skipped.ToArray()
+                hiddenSiblings = $hidSiblings.ToArray()
+                count          = $after.count
+                models         = $after.models
+            }
+        }
+
+        '/api/models/save' {
+            $edition = ''
+            $originalId = ''
+            $patch = $null
+            $create = $false
+            $hint = -1
+            if ($body) {
+                $edition = [string]$body.edition
+                $originalId = [string]$body.originalId
+                $patch = $body.model
+                if ($null -ne $body.PSObject.Properties['create']) { $create = [bool]$body.create }
+                # The card's array position, so a hidden duplicate can be acted
+                # on without the visible twin swallowing it.
+                if ($null -ne $body.PSObject.Properties['index']) { $hint = [int]$body.index }
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            if ($null -eq $patch) { throw 'params_required' }
+            if ($create) { $originalId = '' }
+            elseif (-not $originalId) { throw 'params_required' }
+            return (Save-ModelEntry $edition $originalId $patch $create $hint)
+        }
+
+        '/api/models/delete' {
+            $edition = ''
+            $id = ''
+            $hint = -1
+            if ($body) {
+                $edition = [string]$body.edition
+                $id = [string]$body.id
+                # Same reason as /api/models/save: the position tells the two
+                # same-id entries apart.
+                if ($null -ne $body.PSObject.Properties['index']) { $hint = [int]$body.index }
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            if (-not $id) { throw 'params_required' }
+            return (Remove-ModelEntry $edition $id $hint)
+        }
+
+        '/api/models/test-chat' {
+            # The editor's "test chat" button. Only the return code and one
+            # minimal conversation are checked - no model listing first. When
+            # the address has to be completed (/chat/completions or
+            # /v1/chat/completions) and the completed one works, the working
+            # address comes back as fixedUrl so the form can correct itself.
+            $edition = ''
+            $originalId = ''
+            $patch = $null
+            if ($body) {
+                $edition = [string]$body.edition
+                $originalId = [string]$body.originalId
+                $patch = $body.model
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            if ($null -eq $patch) { throw 'params_required' }
+            $r = Test-ModelChat $edition $patch $originalId
+            Write-Log ("models test-chat: {0} id={1} ok={2} code={3} status={4} url={5} fixed={6}" -f `
+                       $edition, ([string]$patch.id), $r.ok, $r.code, $r.status, $r.chatUrl, $r.fixedUrl)
+            return $r
+        }
+
+        '/api/models/test' {
+            $edition = ''
+            $originalId = ''
+            $patch = $null
+            if ($body) {
+                $edition = [string]$body.edition
+                $originalId = [string]$body.originalId
+                $patch = $body.model
+            }
+            if (-not (Test-Edition $edition)) { throw 'unknown_edition' }
+            if ($null -eq $patch) { throw 'params_required' }
+            $listOnly = $false
+            if ($null -ne $body.PSObject.Properties['listOnly']) { $listOnly = [bool]$body.listOnly }
+            $r = Test-ModelUsable $edition $patch $originalId $listOnly
+            Write-Log ("models test: {0} id={1} ok={2} stage={3} code={4} status={5}" -f `
+                       $edition, ([string]$patch.id), $r.ok, $r.stage, $r.code, $r.status)
+            return $r
+        }
+
         '/api/recover/list' {
             $edition = ''
             if ($query.ContainsKey('edition')) { $edition = $query['edition'] }
@@ -3101,6 +6727,28 @@ function Invoke-Api([string]$path, $query, $req) {
             $edition = ''
             if ($body -and $body.edition) { $edition = [string]$body.edition }
             if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+
+            # 'group-file': hand ONE models file to whatever program owns .json,
+            # so the user can edit it in their own editor. Distinct from every
+            # other target because those open a FOLDER in Explorer, while this
+            # must be a bare path (no explorer.exe in front) or Windows would
+            # just highlight the file instead of opening it.
+            if ($target -eq 'group-file') {
+                $file = ''
+                if ($body -and $body.file) { $file = [string]$body.file }
+                if (-not $file) { throw 'group_required' }
+                # Same validation the group routes use: one leaf name, and it
+                # has to look like one of our files.
+                if ($file -ne [IO.Path]::GetFileName($file)) { throw 'bad_group_name' }
+                if (-not (Test-GroupFile $file)) { throw 'bad_group_name' }
+                $dir = Get-EditionHome $edition
+                $p = Join-Path $dir $file
+                if (-not (Test-Path -LiteralPath $p)) { throw 'group_not_found' }
+                Start-Process -FilePath $p | Out-Null
+                Write-Log ("open group file: {0} {1}" -f $edition, $file)
+                return [pscustomobject]@{ ok = $true; path = $p; file = $file }
+            }
+
             $p = $Root
             if ($target -eq 'backups') { $p = $BackupsDir }
             elseif ($target -eq 'profiles') { $p = $ProfilesDir }
@@ -3145,7 +6793,38 @@ function Handle-Client($client) {
     $script:Pinged = $true
 
     try {
+        # The Host header must name this loopback server. Without this check a
+        # web page can point a hostname it controls at 127.0.0.1 (DNS rebinding)
+        # and then talk to us as a same-origin peer - it would reach both the
+        # token below and every /api/* route. Legitimate callers are the app
+        # window and any /api client, all of which use 127.0.0.1 or localhost.
+        $hostHdr = ''
+        if ($req.headers.ContainsKey('host')) { $hostHdr = [string]$req.headers['host'] }
+        $port = [int]$script:ListenPort
+        $okHost = @(
+            ('127.0.0.1:' + $port), ('localhost:' + $port),
+            ('[::1]:' + $port), ('::1:' + $port)
+        )
+        if ($hostHdr -and ($okHost -notcontains $hostHdr)) {
+            Write-Log ('rejected request with unexpected Host: ' + $hostHdr)
+            Send-Json $stream ([pscustomobject]@{ ok = $false; code = 'forbidden'; error = 'unexpected host' }) 403
+            return
+        }
+
         if ($req.method -eq 'GET' -and ($path -eq '/' -or $path -eq '/index.html')) {
+            # The page is served with the real token substituted into it, so it
+            # is a credentialed document: it must not be readable without the
+            # token. The launch URL already carries ?t=, so a legitimate window
+            # loads fine; anything else gets nothing to read. Without this, any
+            # local process could GET / and walk away with the token that gates
+            # /api/accounts/switch, /api/purge/apply and /api/backup/restore.
+            $t = ''
+            if ($query.ContainsKey('t')) { $t = $query['t'] }
+            if (-not $t -and $req.headers.ContainsKey('x-wb-token')) { $t = $req.headers['x-wb-token'] }
+            if ($t -ne $script:Token) {
+                Send-Json $stream ([pscustomobject]@{ ok = $false; code = 'forbidden'; error = 'invalid token' }) 403
+                return
+            }
             if (-not (Test-Path -LiteralPath $UiPath)) {
                 Send-Bytes $stream 500 'text/plain; charset=utf-8' ([Text.Encoding]::UTF8.GetBytes('ui.html not found next to app.ps1'))
                 return
@@ -3762,6 +7441,10 @@ try { $listener.Start() } catch {
     exit 1
 }
 $actualPort = [int]$listener.LocalEndpoint.Port
+# Kept in a script-scoped variable so request handling can validate the Host
+# header against the port we really bound, rather than reaching up the call
+# stack for $actualPort (which only works by dynamic scoping).
+$script:ListenPort = $actualPort
 
 $chars = 'abcdefghijkmnpqrstuvwxyz23456789'
 $tok = New-Object System.Text.StringBuilder
