@@ -813,6 +813,10 @@
 const TOKEN = '__WB_TOKEN__';
 const ED_KEY = 'wb.keeper.edition';
 const state = { data:null, page:'sessions', edition:null, sessionsPreview:[], previewEdition:null };
+// 预览请求的代次。见 loadPreview：A→B→A 这样切回同一个版本时，光比 edition
+// 分不出「新的 A」和「早先那次 A 的迟到响应」，两者版本都一样；靠序号才能认出
+// 哪次请求是最新的。
+let previewSeq = 0;
 
 /* ---------- utils ---------- */
 const $ = (s,r=document)=>r.querySelector(s);
@@ -931,7 +935,14 @@ const errText = e => {
    探测类接口（test-chat / test / batch-list）失败时返回的是 HTTP 200 +
    ok:false + code/message/tried/reply，没有 error 字段。统一在这里 throw 的话，
    调用方拿不到那几个字段，界面只能显示「请求失败」，地址框不会标红、
-   试过的地址列表也丢了。所以要能按调用点选择「不抛、原样返回」。 */
+   试过的地址列表也丢了。所以要能按调用点选择「不抛、原样返回」。
+
+   注意：能交回调用方的只有「HTTP 成功的探测失败」。后端抛异常时走的是
+   dispatcher 的 catch 分支，返回 HTTP 400/403/404 + {ok:false,code:'error',
+   error:'...'}，没有 message/tried —— 那不是「探测结果」，是「请求根本没能
+   进行」。所以 allowFail 只在 r.ok 为真（2xx）时才原样返回 body；非 2xx
+   一律照旧抛异常。HTTP 状态码是区分这两者的唯一可靠依据，不要靠字段名
+   （有没有 message）去猜。 */
 async function api(path, body, method, opts){
   const url = path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN);
   const opt = { method: method || (body ? 'POST' : 'GET'), headers:{} };
@@ -939,7 +950,7 @@ async function api(path, body, method, opts){
   const r = await fetch(url, opt);
   let j;
   try { j = await r.json(); } catch(e){ throw new Error('服务未响应'); }
-  if(j && j.ok === false && opts && opts.allowFail) return j;
+  if(j && j.ok === false && opts && opts.allowFail && r.ok) return j;
   if(!j || j.ok === false) throw new Error(j && j.error ? j.error : '请求失败');
   return j;
 }
@@ -1296,13 +1307,17 @@ async function loadPreview(){
   // 同 loadModels：换版本时先发的预览请求可能后到，会把上一个版本的会话列表
   // 写进 state.sessionsPreview，于是当前版本下面显示的是另一版本的会话，
   // 「当前账号 / 其他账号」也会按错误的账号去比。回来后版本已经变了就丢。
+  // 另外还要认请求序号：A→B→A 快速切换时两次 A 的 ed 校验都能过，但早先那次
+  // A 的响应若后到，会把新的预览覆盖成旧的，屏幕上留下过时数据。序号不是最新
+  // 就一起丢掉。
+  const seq = ++previewSeq;
   try {
     const s = await api('/api/sessions?limit=8' + (ed ? '&edition=' + encodeURIComponent(ed) : ''));
-    if(ed !== state.edition) return;
+    if(seq !== previewSeq || ed !== state.edition) return;
     state.sessionsPreview = asArr(s.sessions);
     state.previewEdition = s.edition || ed;
   } catch(e){
-    if(ed !== state.edition) return;
+    if(seq !== previewSeq || ed !== state.edition) return;
     state.sessionsPreview = [];
     state.previewEdition = ed;
   }
@@ -2548,7 +2563,10 @@ function renderModels(){
 /* ---------- 卡片上的「测试」 ----------
    和编辑弹窗里的「测试对话」走同一条链路：先看返回码，再看能不能真的回话。
    结果就地显示在三个按钮的正下方，不去动别的卡片。 */
-const mdlTestResults = {};
+// 用 let 而不是 const：换一份配置（loadModels 成功读到新的 models.json）时要整体
+// 置空，见 loadModels。键是「id#位置」，同 id 同位置的条目在新配置里会命中上一份
+// 配置的结果，显示成旧的「可用/不可用」。
+let mdlTestResults = {};
 // 结果键：id + '#' + 位置。同 id 一可见一隐藏时，只按 id 会把结果显示到
 // 另一张卡片上（隐藏那条在数组里可能排在前面）；改、删、隐藏都按「id + 位置」
 // 定位，测试也必须一致，否则四者会指向不同的条目。
@@ -2561,6 +2579,11 @@ async function testModelRow(id, index){
   if(!m){ toast('这条模型已经不在了，请重新读取', 'err'); return; }
   const key = mdlTestKey(m);
   if(mdlTestResults[key] === 'busy') return;
+  // 记下这次测试属于哪一代配置（mdlLoadSeq 每次 loadModels 递增）。测试是慢请求，
+  // 回来时配置可能已经换了（重新读取 / 切版本）。那时 key（id#位置）可能在新配置里
+  // 指向另一条模型，写结果就会把「旧模型的测试结果」画到新卡片上。代次变了就丢掉：
+  // 不写结果、也不 paintTestResult。
+  const gen = mdlLoadSeq;
   mdlTestResults[key] = 'busy';
   paintTestResult(key);
   let r;
@@ -2570,10 +2593,12 @@ async function testModelRow(id, index){
       model: { id, url: m.url || '', apiKey:'', useCustomProtocol: !!m.useCustomProtocol }
     }, undefined, { allowFail:true });
   }catch(e){
+    if(gen !== mdlLoadSeq) return;
     mdlTestResults[key] = { ok:false, text:'测试失败：' + errText(e.message) };
     paintTestResult(key);
     return;
   }
+  if(gen !== mdlLoadSeq) return;
   if(r && r.ok){
     const bits = ['可用'];
     if(r.status) bits.push('HTTP ' + r.status);
@@ -3077,6 +3102,12 @@ async function loadModels(opts){
     loadable: r.loadable !== false, exists: r.exists !== false, loaded: true,
     groups: mdlState.groups || []
   };
+  // 配置换了（重新读取、切版本、改完再读都会走到这里），上一份配置的测试结果必须
+  // 整个丢掉：键是「id#位置」，新配置里同 id 同位置的条目会命中旧结果，卡片上一直
+  // 挂着上一次的「可用 / 不可用」。这是唯一的清空落点——上面那个「不是最新就 return」
+  // 的守卫保证只有真正写进 mdlState 的那一次才会清，selectEdition 里的调用也经过
+  // 这里，所以不需要在别处再清一遍（重复清反而会丢掉刚跑完的在途结果）。
+  mdlTestResults = {};
   renderModels();
   // 分组标签页与模型清单分开取：分组的失败不该挡住模型列表。
   // 同样加守卫：它和上面那个请求是并行发的，版本可能已经在路上换了。

@@ -3686,14 +3686,19 @@ function Get-SyncPlan([string]$name, [string]$product) {
     # --- the local side ---
     $local = @{}
     foreach ($s in (Get-SessionsIndex $product -IncludeDeleted)) { $local[[string]$s.id] = $s }
+    $localProj = Join-Path (Get-EditionHome $product) 'projects'
 
     # Does this backup carry attachments? Get-SessionsIndex ALWAYS counts the
-    # local attachment folder, so the local size only lines up with the backup
-    # size when the backup also carries it. A backup made with
-    # includeAttachments=false would otherwise look smaller than the local copy
-    # for every conversation that has attachments, and a genuinely newer backup
-    # would be reported as "ask" (a conflict) instead of "push" - the sync would
-    # never update anything and the dialog would fill with false conflicts.
+    # local attachment folder (its `bytes` is consumed by ~8 read-only callers,
+    # so it cannot be changed there). The two sides are therefore aligned HERE,
+    # per backup: when the backup carries attachments both sides count the
+    # attachment folder; when it does not (includeAttachments=false) the local
+    # attachment folder is subtracted below so the two numbers are comparable.
+    # Otherwise a backup made without attachments would look smaller than the
+    # local copy for every conversation that has attachments, a genuinely newer
+    # backup would be reported as "ask" (a conflict) instead of "push", and the
+    # sync would never update anything while the dialog filled with false
+    # conflicts.
     $backupHasAtt = $true
     try {
         $mf = Read-JsonFile (Join-Path $dir 'manifest.json')
@@ -3747,10 +3752,18 @@ function Get-SyncPlan([string]$name, [string]$product) {
             continue
         }
         $l = $local[$sid]
-        $entry.dstBytes = [long]$l.bytes
+        # Match the backup's accounting (see $backupHasAtt above): Get-SessionsIndex
+        # unconditionally folds the attachment folder into `bytes`, so subtract it
+        # back out when this backup does not carry attachments.
+        $localBytes = [long]$l.bytes
+        if (-not $backupHasAtt -and $l.hasAttachments) {
+            $attDir = Join-Path (Join-Path $localProj ([string]$l.slug)) $sid
+            if (Test-Path -LiteralPath $attDir) { $localBytes = $localBytes - (Get-FolderSize $attDir) }
+        }
+        $entry.dstBytes = $localBytes
         $entry.dstMs = [long]$l.updatedMs
         $entry.dstAt = [string]$l.updatedAt
-        $entry.verdict = Compare-SyncCandidate $srcBytes $srcMs ([long]$l.bytes) ([long]$l.updatedMs)
+        $entry.verdict = Compare-SyncCandidate $srcBytes $srcMs $localBytes ([long]$l.updatedMs)
         switch ($entry.verdict) {
             'push' { $out.push = @($out.push) + $entry }
             'keep' { $out.keep = @($out.keep) + $entry }
