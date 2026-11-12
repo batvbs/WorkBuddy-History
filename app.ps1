@@ -5604,6 +5604,12 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
     # was promised. Nothing has been touched yet, so stopping here is clean.
     $pre = $null
     if ($mode -eq 'full' -or $mode -eq 'custom' -or $crossEdition) {
+        # A destination that has never been used (fresh install / new machine) has
+        # no edition home at all - that is an EMPTY state, not an error. Create the
+        # directory so the safety snapshot below can take an empty backup (the
+        # rollback point it promises), and so the custom seeding path further down
+        # is actually reachable. Real backup failures still abort.
+        if (-not (Test-Path -LiteralPath $edHome)) { New-Item -ItemType Directory -Path $edHome -Force | Out-Null }
         try {
             $pre = New-Backup ([bool]$mf.includeAttachments) 'pre-restore' '' $product
         } catch {
@@ -5720,6 +5726,16 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                         throw
                     }
                     Remove-Item -LiteralPath $seed -Force -ErrorAction SilentlyContinue
+                    # The seeded rows never pass through Merge-DbSessions (its
+                    # INSERT OR IGNORE sees them as already present), so count
+                    # them here - otherwise a successful restore into an empty
+                    # destination reports zero conversations added.
+                    $db = $null
+                    try {
+                        $db = Open-WbDatabasePath $dbDst
+                        $r = [WbSqlite]::Query($db, 'SELECT count(*) AS n FROM sessions', $null)
+                        $merged += [int]$r[0]['n']
+                    } finally { if ($null -ne $db) { [WbSqlite]::Close($db) } }
                 }
                 if ($mode -eq 'custom') {
                     # Refresh ONLY the ids the user selected. Merge-DbSessions with
