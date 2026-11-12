@@ -884,6 +884,21 @@ function selectEdition(id){
   // 所以这里不看当前在哪一页 —— 在模型页就顺手重拉，不在就只作废（下次进
   // 模型页 setPage 会自己拉），两条路都要把旧的清掉。
   mdlState.loaded = false;
+  // 分组标签页的数据源 mdlState.groups 同样按版本分开（每个版本各自一组
+  // models*.json），一起作废。否则切版本后旧标签会滞留：标签栏渲染的是旧的
+  // 文件列表，而分组的删除/切换用的是「文件名 + 新的 state.edition」，两个版本
+  // 若有同名分组文件，就会拿新版本号去操作旧版本的文件名 —— 操作错版本。
+  //
+  // 清空是安全的：loadModels 里会 ++mdlLoadSeq，上一版本在途的 groups 响应回来时
+  // 被它的 seq/ed 守卫拦下，不会把旧数据写回来。
+  //
+  // renderGroups() 无条件调用（不看当前是否在模型页）：它对空数组就是清空 #mgroups，
+  // #mgroups 是常驻静态节点、不在模型页时只是被 hidden，清掉没有副作用。若只在
+  // 模型页才清，会留一个窄窗口 —— 不在模型页切版本、之后进模型页又赶上 groups
+  // 请求失败（.catch 吞掉）时，旧标签会一直挂着；此时点它左键走 switchGroup，
+  // 而 switchGroup 不校验 groups，仍会拿「新版本号 + 旧文件名」发出去。
+  mdlState.groups = [];
+  renderGroups();
   if(state.page === 'models'){ loadModels().catch(()=>{}); }
   loadPreview().then(renderSessions).catch(()=>{});
 }
@@ -997,19 +1012,24 @@ function topModalEl(){
   return (mw && !mw.classList.contains('hidden')) ? mw : null;
 }
 
-// 背景禁用：body 的直接子元素里，除「最上层弹窗」和 toast 外一律 inert。
+// 背景禁用：body 的直接子元素里，除「最上层弹窗」、toast 和 busy 遮罩外一律 inert。
 //
 // 注意这里不是简单地「凡弹窗都豁免」：自建图层会叠在主弹窗（#modalWrap）之上，
 // 那时下层主弹窗虽然被盖住、Tab 也进不去，但对读屏之类的辅助技术仍然是可见可
 // 激活的 —— 用户会听到两个弹窗的控件混在一起。所以豁免名单只留最上面那一层，
 // 其余弹窗容器一并 inert（关闭图层后再恢复）。inert 不支持的浏览器会忽略这个
 // 属性，此时由 Tab 焦点陷阱兜底。
+//
+// #overlay（busy 遮罩，z-index 80）必须豁免：它比弹窗（60）高，是「处理中」时
+// 拦住重复点击的那道帘子。给它置 inert 会让它连同内部一起不可交互，帘子就变成
+// 可穿透，busy 期间能点到底下的弹窗按钮（已实测复现）。
+// #toasts 是纯展示层，同样不参与 inert。
 function setBackgroundInert(on){
   const top = topModalEl();
   const isLayer = el => el.classList && el.classList.contains('modal-wrap');
   const isModalWrap = el => el.id === 'modalWrap';
   Array.prototype.slice.call(document.body.children).forEach(el=>{
-    if(el.id === 'toasts') return;
+    if(el.id === 'toasts' || el.id === 'overlay') return;
     if(isModalWrap(el) || isLayer(el)){
       // 弹窗容器：只有最上面那层保持可交互，被它盖住的一律 inert。
       const keep = (el === top);
@@ -4102,6 +4122,9 @@ function openBatchImport(){
     // 顺带把测试按钮和进度条复位，避免上一轮的残留；新列表到达时前面的
     // st.models = ... 覆盖逻辑天然就是「清空旧表、换成新表」。
     st.testSeq++;
+    // 记下这次取列表属于哪一代。和批量测试一样：慢请求期间用户可能再点一次
+    // 「获取列表」（或换端点），先发的旧响应回来时不能覆盖后发的新列表。
+    const mySeq = st.testSeq;
     hideProgress();
     $test.disabled = true;
     busy(true, '正在获取模型列表…', url);
@@ -4109,12 +4132,16 @@ function openBatchImport(){
     try{
       r = await api('/api/models/batch-list', { url, apiKey: key }, undefined, { allowFail:true });
     }catch(e){
+      if(st.testSeq !== mySeq) return;   // 已换代：这次失败属于旧请求，别动界面
       busy(false);
       // 取新表失败，旧表还在（st.models 没动），把测试入口放开别卡住用户。
       $test.disabled = !st.models.length;
       note(false, '获取失败', esc(errText(e.message)));
       return;
     }
+    // 换代了（用户在等待期间又点了一次「获取列表」）：丢掉这次结果，让最新那次
+    // 去写 st.models。这一处必须在 st.models 覆盖之前。
+    if(st.testSeq !== mySeq) return;
     busy(false);
 
     if(!r.ok){
@@ -4255,14 +4282,18 @@ function openBatchImport(){
     const mySeq = st.testSeq;
     const btn = $box.querySelector(`[data-bi-one="${CSS.escape(id)}"]`);
     if(btn){ btn.disabled = true; btn.textContent = '测试中'; }
+    // 换代提前返回时，正常路径末尾的 renderRows() 不会执行，按钮会卡在
+    // 「测试中」。若新列表成功会重建 DOM（旧 btn 已脱节点，恢复无副作用）；
+    // 若新列表失败、DOM 还在，恢复按钮用户才能重试。
+    const restoreBtn = ()=>{ if(btn){ btn.disabled = false; btn.textContent = '测试'; } };
     let r;
     try{
       r = await api('/api/models/batch-test', { url: st.url, apiKey: st.key, ids: [id] });
-      if(st.testSeq !== mySeq) return;   // 换代了：丢弃旧结果，新列表已由 $list 重绘
+      if(st.testSeq !== mySeq){ restoreBtn(); return; }   // 换代了：丢弃旧结果，新列表已由 $list 重绘
       const one = asArr(r.results)[0] || { id, ok:false, message:'没有返回结果' };
       applyResult(id, one);
     }catch(e){
-      if(st.testSeq !== mySeq) return;
+      if(st.testSeq !== mySeq){ restoreBtn(); return; }
       applyResult(id, { id, ok:false, status:0, message: errText(e.message) });
     }
     st.tested = true;
