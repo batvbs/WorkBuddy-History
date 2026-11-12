@@ -1,7 +1,7 @@
-# 仓库统一 LF：Windows 工具链常把 CRLF 混进提交，导致 PR diff 全文噪声
+# 仓库行尾约定：与 Beta 现状一致，避免 PR diff 出现全文行尾噪声
 *.ps1  text eol=lf
 *.html text eol=lf
-*.md   text eol=lf
-*.txt  text eol=lf
 *.csv  text eol=lf
 *.json text eol=lf
+*.md   text eol=crlf
+*.txt  text eol=crlf
