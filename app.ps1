@@ -4469,7 +4469,7 @@ function Fork-Session([string]$product, [string]$id) {
                     # half-filled directory (not just fully copied files).
                     New-Item -ItemType Directory -Path $dstAtt -Force | Out-Null
                     $copied.Add($dstAtt)
-                    foreach ($c in @(Get-ChildItem -LiteralPath $att -Force -ErrorAction SilentlyContinue)) {
+                    foreach ($c in @(Get-ChildItem -LiteralPath $att -Force -ErrorAction Stop)) {
                         Copy-Item -LiteralPath $c.FullName -Destination $dstAtt -Recurse -Force -ErrorAction Stop
                     }
                 }
