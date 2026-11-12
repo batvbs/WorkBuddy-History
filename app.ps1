@@ -5612,6 +5612,41 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
         if (-not (Test-Path -LiteralPath $edHome)) { New-Item -ItemType Directory -Path $edHome -Force | Out-Null }
         try {
             $pre = New-Backup ([bool]$mf.includeAttachments) 'pre-restore' '' $product
+            # An empty destination (fresh install / never-used edition home) gets a
+            # snapshot WITHOUT a database file - New-Backup only copies a db that
+            # exists. Full-restoring such a snapshot later would skip the db
+            # replace step, so the conversations a custom/merge restore seeded (or
+            # a full restore installed) would survive, even though the rollback
+            # reports success. Fix: build an EMPTY database from the backup's own
+            # schema (stage it, wipe its session rows) and put it into the
+            # snapshot, so "restore the pre-restore backup" really does return the
+            # destination to its pre-restore (empty) state.
+            if ((Test-Path -LiteralPath (Join-Path $dir 'workbuddy.db')) -and
+                -not (Test-Path -LiteralPath (Join-Path $edHome 'workbuddy.db'))) {
+                $stage2 = $null
+                try {
+                    $stage2 = New-StagedDb $dir
+                    $sdb = Join-Path $stage2 'workbuddy.db'
+                    $db2 = $null
+                    try {
+                        $db2 = Open-WbDatabasePath $sdb
+                        [void][WbSqlite]::Exec($db2, 'BEGIN IMMEDIATE', $null)
+                        try {
+                            [void][WbSqlite]::Exec($db2, 'DELETE FROM session_usage', $null)
+                            [void][WbSqlite]::Exec($db2, 'DELETE FROM sessions', $null)
+                            [void][WbSqlite]::Exec($db2, 'COMMIT', $null)
+                        } catch { [void][WbSqlite]::Exec($db2, 'ROLLBACK', $null); throw }
+                    } finally { if ($null -ne $db2) { [WbSqlite]::Close($db2) } }
+                    $preDir = Join-Path $BackupsDir ([string]$pre.name)
+                    Copy-Item -LiteralPath $sdb -Destination (Join-Path $preDir 'workbuddy.db') -Force
+                    $preMfPath = Join-Path $preDir 'manifest.json'
+                    $preMf = Read-JsonFile $preMfPath
+                    if ($null -ne $preMf) {
+                        $preMf | Add-Member -NotePropertyName hasDatabase -NotePropertyValue $true -Force
+                        Write-JsonFile $preMfPath $preMf
+                    }
+                } finally { if ($null -ne $stage2) { Remove-StagedDb $stage2 } }
+            }
         } catch {
             Write-Log ('pre-restore backup failed, aborting: ' + $_.Exception.Message)
             throw ('backup_failed: ' + (Get-ErrMessage $_.Exception))
@@ -5744,7 +5779,11 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                     # Counts were derived from the plan above, not from this call.
                     [void](Merge-DbSessions $product $stageDb -SelectedIds $validSelected)
                 } else {
-                    $merged = Merge-DbSessions $product $stageDb
+                    # += not =: when the destination db was missing, the seeded rows
+                    # were already counted into $merged above; a plain assignment
+                    # here would discard that count (the merge itself inserts zero
+                    # rows, every backup row is already in place).
+                    $merged += (Merge-DbSessions $product $stageDb)
                 }
             }
         } catch {
