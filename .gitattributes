@@ -1,7 +1,7 @@
 # 仓库行尾约定：与 Beta 现状一致，避免 PR diff 出现全文行尾噪声
+# ps1/html/csv/json = LF；md/txt 历史 blob 是 CRLF，且不能加 text 属性
+# （clean 过滤会把提交时的 CRLF 转回 LF，与 Beta 的 CRLF blob 冲突出全文噪声 diff）
 *.ps1  text eol=lf
 *.html text eol=lf
 *.csv  text eol=lf
 *.json text eol=lf
-*.md   text eol=crlf
-*.txt  text eol=crlf
