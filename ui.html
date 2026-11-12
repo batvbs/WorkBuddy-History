@@ -2616,7 +2616,7 @@ $('#btnAllSessions').onclick = async ()=>{
       </div>
       <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11.5px;color:var(--faint)">
         <span>匹配 <b id="sessShown" style="color:var(--accent)">0</b> 个</span>
-        <span style="margin-left:auto">${running ? '客户端运行中，状态列只读' : '状态列：点一下即时生效'}</span>
+        <span style="margin-left:auto" id="allHint">${running ? '客户端运行中，状态列只读' : '状态列：点一下即时生效'}</span>
         <button type="button" class="btn sm" id="btnClientToggle" title="${running ? '关闭客户端后可修改状态、分叉对话' : '打开客户端'}">${running ? '关闭客户端' : '打开客户端'}</button>
       </div>
     </div>
@@ -2735,11 +2735,19 @@ $('#btnAllSessions').onclick = async ()=>{
   // 分开是为了避免一次操作里重绘两遍（曾经导致上层还没写完就被下层覆盖）。
   function refreshClientUI(){
     const t = $('#btnClientToggle');
-    if(t) t.textContent = running ? '关闭客户端' : '打开客户端';
+    if(t){
+      t.textContent = running ? '关闭客户端' : '打开客户端';
+      t.title = running ? '关闭客户端后可修改状态、分叉对话' : '打开客户端';
+    }
+    // 窗口副标题
     const sub = $('#allSub');
     if(sub) sub.innerHTML = `${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
       ? '客户端正在运行，状态列暂时只读'
       : '客户端未打开，点状态列可直接切换'}`;
+    // 底部状态栏右侧那行提示：早先它只是打开窗口时渲染的静态文字，
+    // 开关客户端后按钮变了、这行却还停在旧状态（用户实测发现）。
+    const hint = $('#allHint');
+    if(hint) hint.textContent = running ? '客户端运行中，状态列只读' : '状态列：点一下即时生效';
   }
 
   // 统一重绘：外壳 + 筛选 + 列表。任何一步出错都要能被看见（toast + console），
