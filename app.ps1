@@ -4358,6 +4358,128 @@ function Invoke-RecoverSessions([string]$product, [string[]]$ids, [bool]$Backup 
 # A row can be archived and deleted at the same time, which is why turning one
 # flag on does not clear the other unless the target state says so.
 # --------------------------------------------------------------------------
+function Fork-Session([string]$product, [string]$id) {
+    # Create a fork (independent duplicate) of one local conversation: a new row
+    # with a fresh UUID plus its own transcript / rollback / attachment files,
+    # leaving the original untouched. The fork's display title gets the source
+    # conversation's last-updated timestamp appended so the two are tellable
+    # apart in the client sidebar.
+    #
+    # Requires the client to be closed, same as every other direct db write.
+    # session_usage is deliberately NOT copied: the fork starts with zero usage.
+    # The transcript lines themselves are copied verbatim - whether the client
+    # tolerates a copied transcript whose lines may embed the OLD session id is
+    # exactly what this feature is meant to find out; the original stays intact
+    # either way, and a bad fork can simply be deleted.
+    if (-not (Test-Edition $product)) { throw 'unknown_edition' }
+    if (-not $id) { throw 'params_required' }
+    if ((Get-ClientProcesses (Get-ProductProc $product)).Count -gt 0) { throw 'client_running' }
+    $home_ = Get-EditionHome $product
+    $dbPath = Join-Path $home_ 'workbuddy.db'
+    if (-not (Test-Path -LiteralPath $dbPath)) { throw 'no_database' }
+
+    $db = Open-WbDatabasePath $dbPath
+    $copied = New-Object System.Collections.Generic.List[string]
+    try {
+        $rows = [WbSqlite]::Query($db, 'SELECT id, title, custom_title, transport, updated_at FROM sessions WHERE id=?1', @($id))
+        if (-not $rows.Count) { throw 'session_not_found' }
+        # cloud rows live on the server; a fork of the mirror row would have no
+        # transcript behind it
+        if ([string]$rows[0]['transport'] -ne 'local') { throw 'cloud_session' }
+
+        $srcMs = [long]0
+        [void][long]::TryParse([string]$rows[0]['updated_at'], [ref]$srcMs)
+        $base = [string]$rows[0]['custom_title']
+        if (-not $base) { $base = [string]$rows[0]['title'] }
+        $stamp = ' (' + (ConvertFrom-Ms $srcMs) + ')'
+        # Cap the combined title: SQLite TEXT has no length limit, but very long
+        # titles are unreadable in the client sidebar. The stamp is always kept
+        # whole; the original name gets truncated to fit.
+        $maxTitle = 120
+        if ($base.Length + $stamp.Length -gt $maxTitle) {
+            $keep = [Math]::Max(1, $maxTitle - $stamp.Length)
+            $base = $base.Substring(0, $keep)
+        }
+        $newTitle = $base + $stamp
+        $newId = [guid]::NewGuid().ToString()
+
+        # Locate the transcript files BEFORE writing anything, so a missing file
+        # is just a db-only fork (some old conversations have no transcript at
+        # all) rather than a half-done operation.
+        $projDir = Join-Path $home_ 'projects'
+        $srcJsonl = ''
+        $srcSlug = ''
+        if (Test-Path -LiteralPath $projDir) {
+            foreach ($slugDir in @(Get-ChildItem -LiteralPath $projDir -Directory -ErrorAction SilentlyContinue)) {
+                $cand = Join-Path $slugDir.FullName ($id + '.jsonl')
+                if (Test-Path -LiteralPath $cand) {
+                    $srcSlug = $slugDir.Name
+                    $srcJsonl = $cand
+                    break
+                }
+            }
+        }
+
+        [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
+        try {
+            # Copy every column of the source row except id, which gets the new
+            # UUID. Columns come from PRAGMA, never from user input; both ids are
+            # bound as parameters. custom_title is then set to the stamped title
+            # (the client prefers custom_title for display; the original title
+            # column keeps its value).
+            $cols = @([WbSqlite]::Query($db, 'PRAGMA table_info(sessions)', $null) |
+                      ForEach-Object { [string]$_['name'] } |
+                      Where-Object { $_ -ne 'id' })
+            if (-not $cols.Count) { throw 'no_sessions_table' }
+            $colList = ($cols | ForEach-Object { '"' + $_ + '"' }) -join ', '
+            [void][WbSqlite]::Exec($db,
+                ("INSERT INTO sessions (id, {0}) SELECT ?1, {0} FROM sessions WHERE id=?2" -f $colList),
+                @($newId, $id))
+            if ($cols -contains 'custom_title') {
+                [void][WbSqlite]::Exec($db,
+                    'UPDATE sessions SET custom_title=?1 WHERE id=?2',
+                    @($newTitle, $newId))
+            }
+
+            # Copy the transcript files under the NEW id next to the original.
+            # A failure here rolls the db insert back and removes whatever the
+            # copy already wrote, so the destination never keeps a fork with no
+            # transcript behind it.
+            if ($srcJsonl) {
+                $slugDir = Join-Path $projDir $srcSlug
+                $dstJsonl = Join-Path $slugDir ($newId + '.jsonl')
+                Copy-Item -LiteralPath $srcJsonl -Destination $dstJsonl -Force
+                $copied.Add($dstJsonl)
+                $rb = Join-Path $slugDir ($id + '.file-rollback.ndjson')
+                if (Test-Path -LiteralPath $rb) {
+                    $dstRb = Join-Path $slugDir ($newId + '.file-rollback.ndjson')
+                    Copy-Item -LiteralPath $rb -Destination $dstRb -Force
+                    $copied.Add($dstRb)
+                }
+                $att = Join-Path $slugDir $id
+                if (Test-Path -LiteralPath $att) {
+                    $dstAtt = Join-Path $slugDir $newId
+                    Copy-Tree $att $dstAtt
+                    $copied.Add($dstAtt)
+                }
+            }
+            [void][WbSqlite]::Exec($db, 'COMMIT', $null)
+        } catch {
+            [void][WbSqlite]::Exec($db, 'ROLLBACK', $null)
+            foreach ($p in $copied) {
+                try {
+                    if ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p).PSIsContainer) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+                    elseif (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }
+                } catch { Write-Log ('fork cleanup: ' + $_.Exception.Message) }
+            }
+            throw
+        }
+        return [pscustomobject]@{ ok = $true; id = $newId; title = $newTitle }
+    } finally {
+        [WbSqlite]::Close($db)
+    }
+}
+
 function Set-SessionState([string]$product, [string]$id, [string]$target) {
     if (-not (Test-Edition $product)) { throw 'unknown_edition' }
     if (-not $id) { throw 'params_required' }
@@ -5632,7 +5754,7 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                         $db2 = Open-WbDatabasePath $sdb
                         [void][WbSqlite]::Exec($db2, 'BEGIN IMMEDIATE', $null)
                         try {
-                            [void][WbSqlite]::Exec($db2, 'DELETE FROM session_usage', $null)
+                            try { [void][WbSqlite]::Exec($db2, 'DELETE FROM session_usage', $null) } catch { }   # session_usage is optional: older backups may not have the table
                             [void][WbSqlite]::Exec($db2, 'DELETE FROM sessions', $null)
                             [void][WbSqlite]::Exec($db2, 'COMMIT', $null)
                         } catch { [void][WbSqlite]::Exec($db2, 'ROLLBACK', $null); throw }
@@ -5737,8 +5859,10 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                                     $ph = @()
                                     for ($k = 0; $k -lt $tail.Count; $k++) { $ph += ('?{0}' -f ($k + 1)) }
                                     $inList = ($ph -join ', ')
-                                    [void][WbSqlite]::Exec($db,
-                                        ("DELETE FROM session_usage WHERE session_id IN ({0})" -f $inList), $tail)
+                                    try {
+                                        [void][WbSqlite]::Exec($db,
+                                            ("DELETE FROM session_usage WHERE session_id IN ({0})" -f $inList), $tail)
+                                    } catch { }   # optional table, same as the purge path
                                     [void][WbSqlite]::Exec($db,
                                         ("DELETE FROM sessions WHERE id IN ({0})" -f $inList), $tail)
                                 }
@@ -6180,6 +6304,18 @@ function Invoke-Api([string]$path, $query, $req) {
                 accounts = $sortedAcc
                 sessions = $items.ToArray()
             }
+        }
+
+        '/api/sessions/fork' {
+            $edition = ''
+            $sid = ''
+            if ($body) {
+                if ($body.edition) { $edition = [string]$body.edition }
+                if ($body.id) { $sid = [string]$body.id }
+            }
+            if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+            $r = Fork-Session $edition $sid
+            return [pscustomobject]@{ ok = $true; edition = $edition; id = $r.id; title = $r.title }
         }
 
         '/api/sessions/state' {

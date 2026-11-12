@@ -212,6 +212,15 @@
   .sess-row:hover{background:#f8fafd}
   .sess-row .t{min-width:0}
   .sess-row .t b{display:block;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess-row .t .ttl{display:flex;align-items:center;gap:5px;min-width:0}
+  .sess-row .t .ttl b{flex:0 1 auto;min-width:0}
+  .forkbtn{
+    flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+    width:20px;height:20px;border:1px solid var(--line-2);border-radius:6px;
+    background:#fff;color:var(--muted);cursor:pointer;padding:0;
+  }
+  .forkbtn:hover:not(:disabled){color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+  .forkbtn:disabled{opacity:.4;cursor:not-allowed}
   .sess-row .t span{display:block;font-size:10.5px;color:var(--faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sess-row .t .ttl{display:flex;align-items:center;gap:6px;min-width:0}
   .sess-row .t .ttl b{flex:0 1 auto;min-width:0}
@@ -2485,7 +2494,8 @@ $('#btnAllSessions').onclick = async ()=>{
   const list = asArr(r.sessions);
   const accounts = asArr(r.accounts);
   const curUid = (r.current && r.current.uid) || '';
-  const running = !!r.running;
+  // let：底部状态栏的「打开 / 关闭客户端」会更新它，列表的锁定状态跟着变
+  let running = !!r.running;
   const filter = { acc: curUid || '*', st: 'all', kw: '' };
   let changed = false;
 
@@ -2535,6 +2545,14 @@ $('#btnAllSessions').onclick = async ()=>{
               : (s.uid ? `<span class="badge n">${esc(nm)}</span>` : '<span class="badge n">未知</span>');
     const tags = s.cloud ? '<span class="badge a">云端</span>' : '';
     const locked = running || s.cloud;
+    // 分叉：把这条对话复制成一条独立的新对话。云端行的正文在服务端，本地
+    // 没有可复制的东西；客户端开着时 db 是只读的（同状态列的规则）。
+    const forkTip = s.cloud ? '云端对话没有本地正文，无法分叉'
+                  : (running ? '客户端正在运行，关闭后可分叉' : '创建分叉副本');
+    const forkBtn = s.cloud ? ''
+      : `<button type="button" class="forkbtn" data-fork="${esc(s.id)}" title="${esc(forkTip)}" ${locked?'disabled':''}>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="4" r="2.2"/><circle cx="6" cy="20" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 6.2v11.6"/><path d="M6 13c0-3 3-4.5 6-4.5h3"/></svg>
+        </button>`;
     // 这段以前是 slug 优先，于是列表里显示的是 c-Users-xxx-2026-10-29 这种
     // projects 下的目录名——它不是路径，只是把路径里的「:」「\」压成了「-」。
     // space 才是数据库里的 cwd，也就是对话真正的目录。云端行两者都没有，
@@ -2544,7 +2562,7 @@ $('#btnAllSessions').onclick = async ()=>{
     const seg = statusCell(s, !locked, s.cloud ? '云端对话存在服务端，本地改不了'
                  : (running ? '客户端正在运行，关闭后可切换' : '点击切换状态'));
     return `<div class="sess-row">
-      <div class="t"><div class="ttl"><b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
+      <div class="t"><div class="ttl">${forkBtn}<b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
         <span${where ? ` title="${esc(where)}"` : ''}>${esc(sub)}</span></div>
       <div class="num">${fmtBytes(s.bytes)}</div>
       <div class="num">${esc(fmtAgo(s.updatedMs))}</div>
@@ -2579,7 +2597,7 @@ $('#btnAllSessions').onclick = async ()=>{
     <div class="modal-h">
       <div>
         <h3>本地对话（${list.length}/${r.total}）</h3>
-        <p>${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
+        <p id="allSub">${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
           ? '客户端正在运行，状态列暂时只读'
           : '客户端未打开，点状态列可直接切换'}</p>
       </div>
@@ -2596,6 +2614,7 @@ $('#btnAllSessions').onclick = async ()=>{
       <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11.5px;color:var(--faint)">
         <span>匹配 <b id="sessShown" style="color:var(--accent)">0</b> 个</span>
         <span style="margin-left:auto">${running ? '客户端运行中，状态列只读' : '状态列：点一下即时生效'}</span>
+        <button type="button" class="btn sm" id="btnClientToggle" title="${running ? '关闭客户端后可修改状态、分叉对话' : '打开客户端'}">${running ? '关闭客户端' : '打开客户端'}</button>
       </div>
     </div>
     <div class="modal-f">
@@ -2616,6 +2635,15 @@ $('#btnAllSessions').onclick = async ()=>{
   $('#q').oninput = e=>{ filter.kw = e.target.value.trim().toLowerCase(); paint(); };
 
   $('#sessBox').addEventListener('click', async e=>{
+    // 分叉：先于状态切换判断（两个按钮都在行内）
+    const fk = e.target.closest('.forkbtn');
+    if(fk){
+      if(fk.disabled) return;
+      const rec = list.find(x=> x.id === fk.dataset.fork);
+      if(!rec) return;
+      openForkConfirm(rec);
+      return;
+    }
     const b = e.target.closest('.seg button');
     if(!b) return;
     const seg = b.parentElement;
@@ -2642,6 +2670,109 @@ $('#btnAllSessions').onclick = async ()=>{
   });
 
   $('#btnPurgeAll').onclick = ()=> openPurgeDialog(r.edition || state.edition);
+
+  /* ---- 分叉确认 + 执行：叠在列表窗口上的图层（不顶掉列表） ---- */
+  function openForkConfirm(rec){
+    const layer = document.createElement('div');
+    layer.className = 'modal-wrap';
+    layer.innerHTML = `<div class="modal">
+      <div class="modal-h"><div><h3>创建分叉副本？</h3><p>${esc(rec.title || '（无标题）')}</p></div>
+        <button class="x" data-x>&times;</button></div>
+      <div class="modal-b">
+        <div class="note">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+          <div>会复制这条对话，生成一条<b>独立的新对话</b>：正文、附件都会复制一份，原标题尾部
+          会加上它的最后更新时间（${esc(fmtStamp(rec.updatedMs))}），方便和原对话区分。
+          原对话保持原样，不受影响。<br>
+          副本是一条新对话，客户端对它的兼容性建议先看一眼；万一显示异常，删掉副本即可。</div>
+        </div>
+      </div>
+      <div class="modal-f"><button class="btn" data-x>取消</button>
+        <button class="btn primary" id="doFork">创建分叉副本</button></div>
+    </div>`;
+    document.body.appendChild(layer);
+    const close = ()=>{ layer.remove(); popModalLayer(layer); };
+    layer.querySelectorAll('[data-x]').forEach(b=> b.onclick = close);
+    pushModalLayer(layer, close);
+    $('#doFork').onclick = async ()=>{
+      const btn = $('#doFork');
+      btn.disabled = true;
+      try{
+        const res = await api('/api/sessions/fork', { edition: r.edition || state.edition, id: rec.id });
+        // 副本继承原行的归属 / 目录 / 状态（完整复制），列表本地插入免重拉
+        list.push({ id: res.id, title: res.title, uid: rec.uid, mine: rec.mine,
+                    nickname: rec.nickname, shortUid: rec.shortUid,
+                    slug: rec.slug, space: rec.space, bytes: rec.bytes,
+                    updatedMs: rec.updatedMs, state: rec.state,
+                    archived: rec.archived, deleted: rec.deleted,
+                    cloud: false, edition: rec.edition, hasAttachments: rec.hasAttachments });
+        changed = true;
+        close();
+        renderFilters(); paint();
+        toast('已创建分叉副本', 'ok');
+      }catch(err){
+        btn.disabled = false;
+        toast('分叉失败：' + errText(err.message), 'err');
+      }
+    };
+  }
+  // 标题后缀的时间戳：与后端同一格式（年月日时分），确认弹窗里先给用户看一眼
+  function fmtStamp(ms){
+    const n = Number(ms) || 0;
+    if(n <= 0) return '';
+    const d = new Date(n);
+    const p = x => String(x).padStart(2,'0');
+    return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  /* ---- 底部状态栏：开 / 关客户端（复用账号切换页的同一组 API） ---- */
+  function refreshClientUI(){
+    const t = $('#btnClientToggle');
+    if(t) t.textContent = running ? '关闭客户端' : '打开客户端';
+    const sub = $('#allSub');
+    if(sub) sub.innerHTML = `${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
+      ? '客户端正在运行，状态列暂时只读'
+      : '客户端未打开，点状态列可直接切换'}`;
+    renderFilters(); paint();
+  }
+  $('#btnClientToggle').onclick = async ()=>{
+    if(running){
+      // 与账号切换页同款确认：退出会中断正在进行中的任务
+      const layer = document.createElement('div');
+      layer.className = 'modal-wrap';
+      layer.innerHTML = `<div class="modal">
+        <div class="modal-h"><div><h3>关闭客户端？</h3><p>${esc(prodName(r.edition || state.edition))}</p></div>
+          <button class="x" data-x>&times;</button></div>
+        <div class="modal-b"><div class="note warn">
+          <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0-2.8 0z"/></svg>
+          <div>客户端正在运行，退出会关闭它，<b>正在进行中的任务会被中断</b>。</div></div></div>
+        <div class="modal-f"><button class="btn" data-x>取消</button>
+          <button class="btn primary" id="doStop">关闭客户端</button></div>
+      </div>`;
+      document.body.appendChild(layer);
+      const close = ()=>{ layer.remove(); popModalLayer(layer); };
+      layer.querySelectorAll('[data-x]').forEach(b=> b.onclick = close);
+      pushModalLayer(layer, close);
+      $('#doStop').onclick = async ()=>{
+        busy(true, '正在关闭客户端…', '关闭 ' + prodName(r.edition || state.edition));
+        try{
+          await api('/api/client/stop', { product: r.edition || state.edition });
+          running = false; changed = true; close(); refreshClientUI();
+          toast('已关闭客户端', 'ok');
+        }catch(e){ toast('关闭失败：' + errText(e.message), 'err'); }
+        finally{ busy(false); }
+      };
+      return;
+    }
+    busy(true, '正在打开客户端…', '启动 ' + prodName(r.edition || state.edition));
+    try{
+      const res = await api('/api/client/start', { product: r.edition || state.edition });
+      if(!res.started){ toast('没能启动：' + errText(res.reason || 'start_timeout'), 'err'); return; }
+      running = true; changed = true; refreshClientUI();
+      toast('已打开客户端', 'ok');
+    }catch(e){ toast('操作失败：' + errText(e.message), 'err'); }
+    finally{ busy(false); }
+  };
 };
 
 /* ---------- models ---------- */
