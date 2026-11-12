@@ -1095,16 +1095,30 @@ const modalLayers = [];
 function pushModalLayer(el, onEsc){
   // 图层叠在主弹窗之上，焦点要跟着进到最上层，键盘够不到被盖住的界面。
   if(!topModalEl()) modalReturnFocus = document.activeElement;
-  modalLayers.push({ el: el, onEsc: onEsc || null });
+  // 每个图层各记一份「打开它之前焦点在哪」。图层都是从主弹窗里的某个控件打开的
+  // （选模型、同名确认、不可用仍要保存），关掉之后要把焦点还给那个控件；
+  // 不记的话收尾的 syncModalState() 会把焦点拽到主弹窗的第一个可聚焦控件上，
+  // 键盘用户就丢了刚才的落脚点（例如从表单靠后的「选择模型」按钮打开的）。
+  modalLayers.push({ el: el, onEsc: onEsc || null, returnFocus: document.activeElement });
   syncModalState();
   return el;
 }
 function popModalLayer(el){
+  let popped = null;
   for(let i = modalLayers.length - 1; i >= 0; i--){
-    if(modalLayers[i].el === el){ modalLayers.splice(i, 1); break; }
+    if(modalLayers[i].el === el){ popped = modalLayers.splice(i, 1)[0]; break; }
   }
   syncModalState();
   if(!topModalEl()) restoreReturnFocus();
+  // 还回图层打开前的焦点。放在 syncModalState() 之后：它可能已经把焦点拽到
+  // 主弹窗的第一个控件，这里再纠正回原来的落脚点。目标必须还在主弹窗里 ——
+  // 主弹窗内容可能已被重建（换页、重新读取），那种情况下保留 syncModalState 的
+  // 兜底结果即可，不要 focus 一个已经脱离文档的节点。
+  else if(popped && popped.returnFocus && document.contains(popped.returnFocus)){
+    const t = popped.returnFocus;
+    const owner = topModalEl();
+    if(owner && owner.contains(t)){ try { t.focus(); } catch(e){} }
+  }
 }
 function closeTopLayer(){
   // 有自建图层就先关它；没有才关主弹窗。
@@ -4049,7 +4063,15 @@ function openBatchImport(){
   // testSeq：「测试代次」。批量测试每块 await 期间用户可能点「获取列表」换端点，
   // 那之后在途的老块会因为代次对不上而作废（见 $test / $list）。每次成功取到新列表
   // 都会 ++，所以每份列表都对应一个唯一代次。
-  const st = { url:'', key:'', models:[], picked:new Set(), tested:false, usedUrl:'', csvOk:true, csvPath:'', csvRows:0, testSeq:0 };
+  //
+  // 两个计数器分工不同，别合并：
+  //   testSeq —— 「当前是哪一份列表」。只有新列表真正落地时才 ++，用来作废在途的
+  //              单行 / 批量测试（它们的结果属于旧列表）。
+  //   listSeq —— 「第几次取列表请求」。点「获取列表」时就 ++，只用来让 $list 自己
+  //              判断回来的响应是不是被后发请求取代了。
+  // 为什么不能只用一个：若取列表时也 ++ testSeq，那么「点了获取列表、但请求失败
+  // （旧表还在、旧测试结果仍然有效）」的情形会把正在跑的测试白白作废，用户得重跑。
+  const st = { url:'', key:'', models:[], picked:new Set(), tested:false, usedUrl:'', csvOk:true, csvPath:'', csvRows:0, testSeq:0, listSeq:0 };
 
   modal(`
     <div class="modal-h">
@@ -4117,14 +4139,13 @@ function openBatchImport(){
   $list.onclick = async ()=>{
     const url = $url.value.trim(), key = $key.value;
     if(!url || !key){ note(false, '还缺信息', '接口地址和 API 密钥都要填上。'); return; }
-    // 用户要换一个端点重新取列表：把正在跑的那轮批量测试作废。代次加一后，
-    // 在途分块回来会发现代次对不上而立刻停手，不再把旧端点的结果画到新表格上。
-    // 顺带把测试按钮和进度条复位，避免上一轮的残留；新列表到达时前面的
-    // st.models = ... 覆盖逻辑天然就是「清空旧表、换成新表」。
-    st.testSeq++;
-    // 记下这次取列表属于哪一代。和批量测试一样：慢请求期间用户可能再点一次
-    // 「获取列表」（或换端点），先发的旧响应回来时不能覆盖后发的新列表。
-    const mySeq = st.testSeq;
+    // 记下这是第几次取列表请求。慢请求期间用户可能再点一次「获取列表」（或换端点），
+    // 先发的旧响应回来时不能覆盖后发的新列表。
+    //
+    // 这里只动 listSeq、不动 testSeq：此刻新列表还没拿到，手上这份列表以及跑在它
+    // 上面的测试结果都还有效。要作废在途测试，等新列表真正落地时再 ++ testSeq。
+    st.listSeq++;
+    const mySeq = st.listSeq;
     hideProgress();
     $test.disabled = true;
     busy(true, '正在获取模型列表…', url);
@@ -4132,16 +4153,16 @@ function openBatchImport(){
     try{
       r = await api('/api/models/batch-list', { url, apiKey: key }, undefined, { allowFail:true });
     }catch(e){
-      if(st.testSeq !== mySeq) return;   // 已换代：这次失败属于旧请求，别动界面
+      if(st.listSeq !== mySeq) return;   // 已被后发的取列表请求取代：别动界面（遮罩由最新那次负责关）
       busy(false);
       // 取新表失败，旧表还在（st.models 没动），把测试入口放开别卡住用户。
       $test.disabled = !st.models.length;
       note(false, '获取失败', esc(errText(e.message)));
       return;
     }
-    // 换代了（用户在等待期间又点了一次「获取列表」）：丢掉这次结果，让最新那次
-    // 去写 st.models。这一处必须在 st.models 覆盖之前。
-    if(st.testSeq !== mySeq) return;
+    // 期间又点过一次「获取列表」：丢掉这次结果，让最新那次去写 st.models。
+    // 这一处必须在 st.models 覆盖之前。
+    if(st.listSeq !== mySeq) return;
     busy(false);
 
     if(!r.ok){
@@ -4151,6 +4172,16 @@ function openBatchImport(){
       return;
     }
     st.url = url; st.key = key;
+    // 新列表要落地了，再作废一代：从「点获取列表」到「新列表落地」这段等待里，
+    // 用户可能用键盘 Tab 到某行的「测试」按钮并触发单行测试（行按钮不受 $test 的
+    // disabled 约束，overlay 只挡指针不挡键盘）。那次测试记下的是本次取列表已经
+    // 递增过的代次，若这里不再 +1，它回来时守卫会通过，applyResult 就把旧端点的
+    // 结果写进新列表里同 id 的那一行（还会改勾选，进而影响批量保存的内容）。
+    //
+    // 位置必须在这里、不能提前到上面那段守卫之后：!r.ok 分支就在上面，提前 ++ 会让
+    // 「HTTP 失败但旧表还留着」的情形也作废在途测试 —— 那种情况下旧表仍然有效，
+    // 测试结果也有效，作废属于误伤。
+    st.testSeq++;
     st.models = asArr(r.models);
     st.usedUrl = r.usedUrl;
     // 把补全结果写回接口地址：用户往往只填了域名或 /v1，列表是靠补全才拿到的。
@@ -4326,9 +4357,14 @@ function openBatchImport(){
     const CHUNK = 8;
     let done = 0, failed = 0;
     // 记下这轮测试属于哪一代列表。测试是慢请求，期间用户可能点「获取列表」换端点
-    // （那会把 st.testSeq 加一）。代次一变，在途分块的结果就属于旧端点，必须丢掉，
-    // 否则会画到新列表的同名条目上。
+    // —— 只有新列表真正落地时 testSeq 才会变（见 $list），代次一变，在途分块的结果
+    // 就属于旧表，必须丢掉，否则会画到新列表的同名条目上。
     const mySeq = st.testSeq;
+    // 另记一个 listSeq：$test 的开关权归 $list 管 —— 若期间用户点过「获取列表」，
+    // 收尾时不能把 $test 放开（那时 $list 正在取新表，放开就能在旧/空表上点测试）。
+    // 这件事只有 listSeq 能反映：testSeq 在「取列表失败、旧表还在」时是不变的，
+    // 而那种情况恰恰应该由 $list 按 !st.models.length 自己复原。
+    const myListSeq = st.listSeq;
     $test.disabled = true;
     showProgress(0, total, '正在测试…');
     try{
@@ -4361,9 +4397,12 @@ function openBatchImport(){
       note(st.picked.size > 0, `测试完成：${st.picked.size} / ${total} 个可用`,
            '失败的行会红字标出来' + extra + '。');
     }finally{
-      // 已换代时不能复位：此时 $list 正在取新表（$test 被它置为 disabled），
-      // 这里再放开就会让用户在旧/空表上点测试。新列表到达时 $list 自己会放开。
-      if(st.testSeq === mySeq) $test.disabled = false;
+      // 期间用户点过「获取列表」就不要复位：此时 $list 正在取新表（$test 被它置为
+      // disabled），这里再放开就会让用户在旧/空表上点测试。新列表到达时 $list 自己
+      // 会放开；取列表失败时 $list 也会按 !st.models.length 复原。
+      // 用 listSeq 而不是 testSeq：后者在「取列表失败、旧表仍在」时不变，用它判断
+      // 会误放开；而那种情况本就该由 $list 收尾。
+      if(st.listSeq === myListSeq) $test.disabled = false;
     }
   };
 
