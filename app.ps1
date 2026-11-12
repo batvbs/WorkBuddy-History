@@ -5670,25 +5670,26 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                     $seed = Join-Path $stage 'dest-seed.db'
                     Copy-Item -LiteralPath $stageDb -Destination $seed -Force
                     if ($mode -eq 'custom') {
-                        # The seed contains EVERY backup row; custom restore must
-                        # leave unselected backup rows absent. Delete them (and
-                        # their session_usage rows) from the candidate: the plan's
-                        # items MINUS the validated user selection. Cloud rows were
-                        # already excluded from the plan by Get-RestorePlan.
-                        # Chunked IN deletes - a chunked NOT IN would only test its
-                        # own chunk and delete selected ids living in other chunks.
+                        # The seed contains EVERY backup row - including cloud
+                        # rows, which Get-RestorePlan intentionally leaves out of
+                        # the plan. Build the removal list from the seed's OWN
+                        # rows (everything not selected), not from the plan:
+                        # otherwise cloud rows would slip through the diff and
+                        # get installed. Custom restore installs exactly the
+                        # user's selection and nothing else.
+                        # Chunked IN deletes - a chunked NOT IN would only test
+                        # its own chunk and delete selected ids living in other
+                        # chunks.
                         $selIds = @{}
                         foreach ($k in $validSelected.Keys) { $selIds[[string]$k] = $true }
-                        $unselected = @()
-                        foreach ($item in @($plan.items)) {
-                            $iid = [string]$item.id
-                            if (-not $selIds.ContainsKey($iid)) { $unselected += $iid }
-                        }
                         $db = $null
                         try {
                             $db = Open-WbDatabasePath $seed
                             [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
                             try {
+                                $allIds = @([WbSqlite]::Query($db, 'SELECT id FROM sessions', $null) |
+                                            ForEach-Object { [string]$_['id'] })
+                                $unselected = @($allIds | Where-Object { -not $selIds.ContainsKey($_) })
                                 $chunk = 400
                                 for ($i = 0; $i -lt $unselected.Count; $i += $chunk) {
                                     $tail = @($unselected[$i..([Math]::Min($i + $chunk - 1, $unselected.Count - 1))])
