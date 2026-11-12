@@ -3423,10 +3423,15 @@ function openModelEditor(id, index){
   modal(`
     <div class="modal-h">
       <div>
-        <h3>${editing ? '编辑模型' : '添加模型'}</h3>
-        <p>${isNew
+        <h3>${!editing ? '添加模型' : (isNew ? '补全模型' : '编辑模型')}</h3>
+        <p>${!editing
           ? '填好后客户端约 1 秒就会读到它，不用重启。'
-          : '只改你在下面动过的字段，其余原样保留。'}</p>
+          : (isNew
+              // 无 id 的条目没法就地补 id（写回时后端按 id 定位，空 id 找不到），
+              // 只能按你填的 id 新建一条。标题就得说清是「补全」而不是「编辑」，
+              // 否则用户会以为保存后原来那条被修好了、结果是多出一条。
+              ? '这一条原本没有 id（客户端会跳过它）。保存后会按你填的 id 建成一条可用的模型，原来那条没有 id 的仍留在文件里。'
+              : '只改你在下面动过的字段，其余原样保留。')}</p>
       </div>
       <button class="x" data-close>&times;</button>
     </div>
@@ -4071,7 +4076,11 @@ function openBatchImport(){
   //              判断回来的响应是不是被后发请求取代了。
   // 为什么不能只用一个：若取列表时也 ++ testSeq，那么「点了获取列表、但请求失败
   // （旧表还在、旧测试结果仍然有效）」的情形会把正在跑的测试白白作废，用户得重跑。
-  const st = { url:'', key:'', models:[], picked:new Set(), tested:false, usedUrl:'', csvOk:true, csvPath:'', csvRows:0, testSeq:0, listSeq:0 };
+  //
+  // batchBusy / listBusy：谁在处理长任务。它们是「$test 现在能不能点」的唯一判据
+  // （见 syncTestBtn），这样各处只需要更新状态、不用各自去猜该不该放开按钮 ——
+  // 否则很容易出现「谁都以为别人会放开」的责任真空，按钮就此卡死。
+  const st = { url:'', key:'', models:[], picked:new Set(), tested:false, usedUrl:'', csvOk:true, csvPath:'', csvRows:0, testSeq:0, listSeq:0, batchBusy:false, listBusy:false };
 
   modal(`
     <div class="modal-h">
@@ -4125,6 +4134,15 @@ function openBatchImport(){
   const $list = g('#bi_list'), $test = g('#bi_test'), $save = g('#bi_save');
   const $stat = g('#bi_stat'), $note = g('#bi_note'), $box = g('#bi_listbox');
 
+  // 「测试对话」按钮能不能点，只看这两个状态：手上有没有列表、有没有别的长任务在跑。
+  // 所有会改变这两件事的地方都调它，而不是各自直接写 $test.disabled —— 以前是
+  // 每个分支自己判断该放开还是保持禁用，容易顾此失彼：
+  //   · 取列表失败时若直接放开，正在跑的批量测试就没人拦着再起一批，两批结果会在
+  //     同一张表上互相覆盖（后回来的把先回来的结果、勾选一起改掉）；
+  //   · 反过来若谁都不放开，按钮就永远禁用了。
+  // 收口到一处，两个方向都不会漏。
+  const syncTestBtn = ()=>{ $test.disabled = !!st.batchBusy || !!st.listBusy || !st.models.length; };
+
   g('#bi_eye').onclick = ()=>{ $key.type = $key.type === 'password' ? 'text' : 'password'; };
 
   const note = (ok, title, detail)=>{
@@ -4147,7 +4165,8 @@ function openBatchImport(){
     st.listSeq++;
     const mySeq = st.listSeq;
     hideProgress();
-    $test.disabled = true;
+    st.listBusy = true;
+    syncTestBtn();
     busy(true, '正在获取模型列表…', url);
     let r;
     try{
@@ -4155,8 +4174,11 @@ function openBatchImport(){
     }catch(e){
       if(st.listSeq !== mySeq) return;   // 已被后发的取列表请求取代：别动界面（遮罩由最新那次负责关）
       busy(false);
-      // 取新表失败，旧表还在（st.models 没动），把测试入口放开别卡住用户。
-      $test.disabled = !st.models.length;
+      // 取新表失败，旧表还在（st.models 没动）。放开测试入口，但若此刻还有一批
+      // 测试在跑（batchBusy），syncTestBtn 会继续按着不放 —— 否则用户能在旧表上
+      // 再起一批，两批结果会在同一张表上互相覆盖。
+      st.listBusy = false;
+      syncTestBtn();
       note(false, '获取失败', esc(errText(e.message)));
       return;
     }
@@ -4167,7 +4189,9 @@ function openBatchImport(){
 
     if(!r.ok){
       const tried = asArr(r.tried).map(t => `<code>${esc(t.url)}</code> → ${t.status || '连不上'}`).join('<br>');
-      $test.disabled = !st.models.length;
+      // 同理：接口返回失败、旧表仍在，放开入口；还有批量在跑就继续按着。
+      st.listBusy = false;
+      syncTestBtn();
       note(false, '没能拿到模型列表', esc(r.message || r.code) + (tried ? '<br>试过这些地址：<br>' + tried : ''));
       return;
     }
@@ -4220,7 +4244,8 @@ function openBatchImport(){
     note(true, `拿到 ${st.models.length} 个模型`,
       '已默认全选。可以直接保存，也可以先「测试对话」把用不了的筛掉。' + extra + completedNote + csvNote);
     renderRows();
-    $test.disabled = false;
+    st.listBusy = false;
+    syncTestBtn();
     renderSave();
   };
 
@@ -4360,12 +4385,8 @@ function openBatchImport(){
     // —— 只有新列表真正落地时 testSeq 才会变（见 $list），代次一变，在途分块的结果
     // 就属于旧表，必须丢掉，否则会画到新列表的同名条目上。
     const mySeq = st.testSeq;
-    // 另记一个 listSeq：$test 的开关权归 $list 管 —— 若期间用户点过「获取列表」，
-    // 收尾时不能把 $test 放开（那时 $list 正在取新表，放开就能在旧/空表上点测试）。
-    // 这件事只有 listSeq 能反映：testSeq 在「取列表失败、旧表还在」时是不变的，
-    // 而那种情况恰恰应该由 $list 按 !st.models.length 自己复原。
-    const myListSeq = st.listSeq;
-    $test.disabled = true;
+    st.batchBusy = true;
+    syncTestBtn();
     showProgress(0, total, '正在测试…');
     try{
       for(let i = 0; i < total; i += CHUNK){
@@ -4397,12 +4418,11 @@ function openBatchImport(){
       note(st.picked.size > 0, `测试完成：${st.picked.size} / ${total} 个可用`,
            '失败的行会红字标出来' + extra + '。');
     }finally{
-      // 期间用户点过「获取列表」就不要复位：此时 $list 正在取新表（$test 被它置为
-      // disabled），这里再放开就会让用户在旧/空表上点测试。新列表到达时 $list 自己
-      // 会放开；取列表失败时 $list 也会按 !st.models.length 复原。
-      // 用 listSeq 而不是 testSeq：后者在「取列表失败、旧表仍在」时不变，用它判断
-      // 会误放开；而那种情况本就该由 $list 收尾。
-      if(st.listSeq === myListSeq) $test.disabled = false;
+      // 这轮跑完了，交还「正在测试」的状态。按钮能不能点由 syncTestBtn 统一算：
+      // 若期间用户点过「获取列表」且它还在途（listBusy），按钮会继续保持禁用；
+      // 取列表失败、旧表仍有效时则由那次请求自己收尾。
+      st.batchBusy = false;
+      syncTestBtn();
     }
   };
 
