@@ -4464,11 +4464,14 @@ function Fork-Session([string]$product, [string]$id) {
                     # purpose (attachment caches tolerate gaps in other flows),
                     # but a fork must not report success with a partial
                     # attachment directory. Errors must reach the rollback.
+                    # The destination folder is registered BEFORE any child is
+                    # copied, so a child copy failing partway still removes the
+                    # half-filled directory (not just fully copied files).
                     New-Item -ItemType Directory -Path $dstAtt -Force | Out-Null
+                    $copied.Add($dstAtt)
                     foreach ($c in @(Get-ChildItem -LiteralPath $att -Force -ErrorAction SilentlyContinue)) {
                         Copy-Item -LiteralPath $c.FullName -Destination $dstAtt -Recurse -Force -ErrorAction Stop
                     }
-                    $copied.Add($dstAtt)
                 }
             }
             [void][WbSqlite]::Exec($db, 'COMMIT', $null)
