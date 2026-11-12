@@ -4464,6 +4464,13 @@ function Fork-Session([string]$product, [string]$id) {
                 }
             }
             [void][WbSqlite]::Exec($db, 'COMMIT', $null)
+            # Same close-out as the other direct writers (Set-SessionState,
+            # purge, recover): flush the WAL so the client / our own index see
+            # the fork immediately, and drop the 10s session cache so the page
+            # reload after this dialog closes does not serve stale totals.
+            [void][WbSqlite]::Query($db, 'PRAGMA wal_checkpoint(TRUNCATE)', $null)
+            $script:SessionCache = @{}
+            $script:SessionCacheAt = @{}
         } catch {
             [void][WbSqlite]::Exec($db, 'ROLLBACK', $null)
             foreach ($p in $copied) {
