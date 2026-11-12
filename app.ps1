@@ -3668,7 +3668,12 @@ function Get-RestorePlan([string]$name, [string]$product) {
             $stageDb = Join-Path $stage 'workbuddy.db'
             foreach ($r in (Get-DbSessionsAt $stageDb)) { $srcRows.Add($r) }
         } catch {
+            # Swallowing this would return an empty-but-OK plan: the dialog would
+            # enable "confirm", the user would submit selections, and custom
+            # restore would report success while having done nothing. Let the
+            # error reach the dialog so it can show the reason and offer retry.
             Write-Log ('restore plan: backup db unreadable: ' + $_.Exception.Message)
+            throw
         } finally { Remove-StagedDb $stage }
     }
 
@@ -5648,14 +5653,82 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                 Remove-Item -LiteralPath ($dbDst + '-wal') -Force -ErrorAction SilentlyContinue
                 Remove-Item -LiteralPath ($dbDst + '-shm') -Force -ErrorAction SilentlyContinue
                 Copy-Item -LiteralPath $stageDb -Destination $dbDst -Force
-            } elseif ($mode -eq 'custom') {
-                # Refresh ONLY the ids the user selected. Merge-DbSessions with
-                # -SelectedIds never inserts unselected backup-only rows and never
-                # deletes local-only rows, so this stays a true custom restore.
-                # Counts were derived from the plan above, not from this call.
-                [void](Merge-DbSessions $product $stageDb -SelectedIds $validSelected)
             } else {
-                $merged = Merge-DbSessions $product $stageDb
+                # merge and custom both merge INTO the destination database, and
+                # Open-WbDatabase throws no_database when it does not exist yet.
+                # A fresh install (or a never-used edition home) has no db, which
+                # is exactly the "new machine" case these modes are for - so seed
+                # the destination from the backup db first.
+                #
+                # Seeding builds a CANDIDATE inside the staging directory and only
+                # moves it into place once fully prepared. Installing the backup db
+                # first and pruning afterwards would leave a FULL copy (unselected
+                # rows included) sitting at the destination if pruning failed - and
+                # a destination without a db has nothing to put into the pre-restore
+                # backup, so that damage could not be rolled back.
+                if (-not (Test-Path -LiteralPath $dbDst)) {
+                    $seed = Join-Path $stage 'dest-seed.db'
+                    Copy-Item -LiteralPath $stageDb -Destination $seed -Force
+                    if ($mode -eq 'custom') {
+                        # The seed contains EVERY backup row; custom restore must
+                        # leave unselected backup rows absent. Delete them (and
+                        # their session_usage rows) from the candidate: the plan's
+                        # items MINUS the validated user selection. Cloud rows were
+                        # already excluded from the plan by Get-RestorePlan.
+                        # Chunked IN deletes - a chunked NOT IN would only test its
+                        # own chunk and delete selected ids living in other chunks.
+                        $selIds = @{}
+                        foreach ($k in $validSelected.Keys) { $selIds[[string]$k] = $true }
+                        $unselected = @()
+                        foreach ($item in @($plan.items)) {
+                            $iid = [string]$item.id
+                            if (-not $selIds.ContainsKey($iid)) { $unselected += $iid }
+                        }
+                        $db = $null
+                        try {
+                            $db = Open-WbDatabasePath $seed
+                            [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
+                            try {
+                                $chunk = 400
+                                for ($i = 0; $i -lt $unselected.Count; $i += $chunk) {
+                                    $tail = @($unselected[$i..([Math]::Min($i + $chunk - 1, $unselected.Count - 1))])
+                                    $ph = @()
+                                    for ($k = 0; $k -lt $tail.Count; $k++) { $ph += ('?{0}' -f ($k + 1)) }
+                                    $inList = ($ph -join ', ')
+                                    [void][WbSqlite]::Exec($db,
+                                        ("DELETE FROM session_usage WHERE session_id IN ({0})" -f $inList), $tail)
+                                    [void][WbSqlite]::Exec($db,
+                                        ("DELETE FROM sessions WHERE id IN ({0})" -f $inList), $tail)
+                                }
+                                [void][WbSqlite]::Exec($db, 'COMMIT', $null)
+                            } catch { [void][WbSqlite]::Exec($db, 'ROLLBACK', $null); throw }
+                        } catch {
+                            Remove-Item -LiteralPath $seed -Force -ErrorAction SilentlyContinue
+                            throw
+                        } finally { if ($null -ne $db) { [WbSqlite]::Close($db) } }
+                    }
+                    # Candidate ready: install it. If the install itself fails,
+                    # remove whatever half-written destination file got created -
+                    # never leave a partial database behind.
+                    Remove-Item -LiteralPath ($dbDst + '-wal') -Force -ErrorAction SilentlyContinue
+                    Remove-Item -LiteralPath ($dbDst + '-shm') -Force -ErrorAction SilentlyContinue
+                    try {
+                        Copy-Item -LiteralPath $seed -Destination $dbDst -Force
+                    } catch {
+                        Remove-Item -LiteralPath $dbDst -Force -ErrorAction SilentlyContinue
+                        throw
+                    }
+                    Remove-Item -LiteralPath $seed -Force -ErrorAction SilentlyContinue
+                }
+                if ($mode -eq 'custom') {
+                    # Refresh ONLY the ids the user selected. Merge-DbSessions with
+                    # -SelectedIds never inserts unselected backup-only rows and never
+                    # deletes local-only rows, so this stays a true custom restore.
+                    # Counts were derived from the plan above, not from this call.
+                    [void](Merge-DbSessions $product $stageDb -SelectedIds $validSelected)
+                } else {
+                    $merged = Merge-DbSessions $product $stageDb
+                }
             }
         } catch {
             Remove-StagedDb $stage

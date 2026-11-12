@@ -1990,10 +1990,10 @@ async function restoreDialog(name){
         exists
       };
     }
-    function badges(it){
-      const s = it.src || {};
-      return (s.archived ? '<span class="cst arch">已归档</span>' : '')
-           + (s.deleted  ? '<span class="cst del">已删除</span>' : '');
+    function badges(o){
+      o = o || {};
+      return (o.archived ? '<span class="cst arch">已归档</span>' : '')
+           + (o.deleted  ? '<span class="cst del">已删除</span>' : '');
     }
     function rowHtml(r){
       const it = r.it, idx = r.idx, c = cmp(it);
@@ -2001,10 +2001,10 @@ async function restoreDialog(name){
       const on = choices[idx];
       const noAtt = plan.backupHasAttachments === false;
       return `<div class="crow" data-idx="${idx}">
-        <div class="crow-h"><span class="cname" title="${esc(it.title || it.id)}">${esc(it.title || it.id)}</span>${badges(it)}</div>
+        <div class="crow-h"><span class="cname" title="${esc(it.title || it.id)}">${esc(it.title || it.id)}</span></div>
         <div class="cpick">
           <label class="cside ${on==='backup'?'on':''}" data-side="backup">
-            <span class="cradio"><input type="radio" name="cr_${idx}" value="backup" ${on==='backup'?'checked':''}> 备份</span>
+            <span class="cradio"><input type="radio" name="cr_${idx}" value="backup" ${on==='backup'?'checked':''}> 备份${badges(s)}</span>
             <span class="cmeta">
               <span class="cln">更新：<span class="at ${c.newer==='backup'?'newer':''}">${esc(s.at || '—')}</span></span>
               <span class="cln">大小：<span class="sz ${c.bigger==='backup'?'bigger':''}">${fmtBytes(s.bytes)}</span></span>
@@ -2012,7 +2012,7 @@ async function restoreDialog(name){
             </span>
           </label>
           <label class="cside ${on==='local'?'on':''}" data-side="local">
-            <span class="cradio"><input type="radio" name="cr_${idx}" value="local" ${on==='local'?'checked':''}> 本地</span>
+            <span class="cradio"><input type="radio" name="cr_${idx}" value="local" ${on==='local'?'checked':''}> 本地${c.exists?badges(d):''}</span>
             <span class="cmeta">
               ${c.exists
                 ? `<span class="cln">更新：<span class="at ${c.newer==='local'?'newer':''}">${esc(d.at || '—')}</span></span>
@@ -2139,6 +2139,13 @@ async function restoreDialog(name){
       const rm = $('#cbRemap2');
       const remap = !!(rm && rm.checked && !rm.disabled);
       const selectedIds = rows.filter(r=>choices[r.idx]==='backup').map(r=>r.id);
+      // 后端会拒绝超过 5000 的选择，而 execRestore 会先关掉本弹窗——真等到
+      // 后端报错，用户的选择就全丢了，得从头再选一遍。在这里先拦下，弹窗
+      // 保持打开，让用户减选。
+      if(selectedIds.length > 5000){
+        toast('一次最多恢复 5000 个对话，当前选了 ' + selectedIds.length + ' 个，请少选一些再确认', 'err');
+        return;
+      }
       execRestore({ name, mode:'custom', selectedIds, remap, target: state.edition }, remap);
     };
     loadPlan();
