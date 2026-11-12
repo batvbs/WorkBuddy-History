@@ -1,6 +1,7 @@
-# 仓库里存的必须是发布包里的原始字节：一律禁止 git 转换换行符。
-#
-# 不加这段的话，Windows 上 core.autocrlf 会把提交时的 CRLF 悄悄改成 LF，
-# 仓库里下载到的文件和本地打包的 zip 就对不上（差多少字节正好等于多少行）。
-# -text = 不做任何 EOL 规范化，提交什么存什么，检出也原样给出。
-* -text
+# 仓库统一 LF：Windows 工具链常把 CRLF 混进提交，导致 PR diff 全文噪声
+*.ps1  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.csv  text eol=lf
+*.json text eol=lf
