@@ -1,5 +1,5 @@
 <#
-  WorkBuddy Keeper 1.7.0
+  WorkBuddy Keeper 1.8.0
   Session backup / restore + account switch for the WorkBuddy desktop client.
   Supports both editions (China and international) side by side.
 
@@ -37,7 +37,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$AppVersion = '1.7.0'
+$AppVersion = '1.8.0'
 
 # --------------------------------------------------------------------------
 # paths
@@ -3615,58 +3615,47 @@ function Invoke-UidRemap([string]$dbPath, [string]$oldUid, [string]$newUid) {
     }
 }
 
-function Compare-SyncCandidate([long]$srcBytes, [long]$srcMs, [long]$dstBytes, [long]$dstMs) {
-    # Decides what "sync by time" should do about ONE conversation that exists
-    # on both sides. Returns one of:
+function Get-RestoreGroup([bool]$exists, [long]$srcBytes, [long]$srcMs, [long]$dstBytes, [long]$dstMs) {
+    # GROUPING SUGGESTION ONLY - this is NOT a decision about what to overwrite.
+    # Custom restore never lets the backend pick conversations: the user submits
+    # an explicit id set (selectedIds) and the backend overwrites exactly those.
+    # This helper only stamps one of four labels on a row so the UI can pre-select
+    # a sensible default per group. The final choice ALWAYS comes from the user.
     #
-    #   'push'   - the backup copy wins, overwrite what is on disk
-    #   'keep'   - the local copy is at least as good, leave it alone
-    #   'ask'    - the two disagree in a way no rule can settle
-    #
-    # The rules, in the order they are checked:
-    #
-    #   1. same time AND same size            -> keep  (nothing to do)
-    #   2. backup bigger AND newer            -> push  (backup is strictly better)
-    #   3. backup older AND smaller           -> keep  (local is strictly better)
-    #   4. anything else                       -> ask
-    #
-    # Rules 1 and 3 both mean "keep", and they are not redundant: (1) is
-    # "identical", (3) is "the local copy is strictly ahead on both axes".
-    # Rule (3) is what stops a restore from a stale backup walking newer local
-    # work backwards - the backup being older AND smaller can only mean the
-    # local side moved on, so overwriting it would lose changes for no gain.
-    #
-    # "Anything else" is deliberately the catch-all rather than a guess. What
-    # lands there is exactly the genuinely ambiguous shapes:
-    #   - newer but smaller (an edit that removed text)
-    #   - older but bigger  (the local copy grew after the backup)
-    # In both, the file that looks better on one axis looks worse on the other,
-    # and silently picking one is how a sync eats the wrong side's work. Those
-    # go to the user as a list instead.
-    #
-    # A tie on time with different sizes is NOT "same" either - one side clearly
-    # changed without its timestamp moving, and we cannot tell which.
-    if ($srcBytes -eq $dstBytes -and $srcMs -eq $dstMs) { return 'keep' }
-    if ($srcBytes -gt $dstBytes -and $srcMs -gt $dstMs) { return 'push' }
-    if ($srcBytes -lt $dstBytes -and $srcMs -lt $dstMs) { return 'keep' }
-    return 'ask'
+    #   backupOnly   - the id is not present locally (exists=false)
+    #   backupBetter - backup is BOTH newer AND larger
+    #   localBetter  - identical, or strictly older AND smaller
+    #   conflict     - the two axes disagree: newer-but-smaller, older-but-bigger,
+    #                  same time different size, one axis equal ... i.e. everything else
+    if (-not $exists) { return 'backupOnly' }
+    if ($srcMs -gt $dstMs -and $srcBytes -gt $dstBytes) { return 'backupBetter' }
+    if (($srcMs -eq $dstMs -and $srcBytes -eq $dstBytes) -or `
+        ($srcMs -lt $dstMs -and $srcBytes -lt $dstBytes)) { return 'localBetter' }
+    return 'conflict'
 }
 
-function Get-SyncPlan([string]$name, [string]$product) {
-    # Read-only survey of what a time-based sync would do. Never writes anything.
-    # Used both by the restore dialog (to show counts before the user commits)
-    # and by Restore-Backup itself, so the list the user saw is the list that
-    # gets applied.
+function Get-RestorePlan([string]$name, [string]$product) {
+    # Read-only survey for custom restore: a FULL list of the conversations that
+    # exist in the backup (cloud rows excluded), with the size, time and state of
+    # both the backup and the local copy. Never writes anything, and it does NOT
+    # decide what to overwrite - the group labels are only default suggestions,
+    # the user submits the final id set. Restore-Backup calls this again with the
+    # SAME arguments so the list the user saw is the list that gets applied.
     $dir = Join-Path $BackupsDir $name
     if (-not (Test-Path -LiteralPath $dir)) { throw 'backup_missing' }
 
     $out = [pscustomobject]@{
-        push       = @()   # backup copy is bigger AND newer -> will overwrite
-        keep       = @()   # identical -> untouched
-        conflicts  = @()   # caller must decide
-        backupOnly = @()   # not present locally -> gets added
-        total      = 0
-        hasBackupDb = $false
+        items                = @()
+        total                = 0
+        hasBackupDb          = $false
+        backupHasAttachments = $false
+        cloudSkipped         = 0
+        groups               = [pscustomobject]@{
+            conflict     = 0
+            backupBetter = 0
+            backupOnly   = 0
+            localBetter  = 0
+        }
     }
 
     # --- the backup side: read its database, not its manifest ---
@@ -3679,7 +3668,7 @@ function Get-SyncPlan([string]$name, [string]$product) {
             $stageDb = Join-Path $stage 'workbuddy.db'
             foreach ($r in (Get-DbSessionsAt $stageDb)) { $srcRows.Add($r) }
         } catch {
-            Write-Log ('sync plan: backup db unreadable: ' + $_.Exception.Message)
+            Write-Log ('restore plan: backup db unreadable: ' + $_.Exception.Message)
         } finally { Remove-StagedDb $stage }
     }
 
@@ -3695,10 +3684,8 @@ function Get-SyncPlan([string]$name, [string]$product) {
     # attachment folder; when it does not (includeAttachments=false) the local
     # attachment folder is subtracted below so the two numbers are comparable.
     # Otherwise a backup made without attachments would look smaller than the
-    # local copy for every conversation that has attachments, a genuinely newer
-    # backup would be reported as "ask" (a conflict) instead of "push", and the
-    # sync would never update anything while the dialog filled with false
-    # conflicts.
+    # local copy for every conversation that has attachments, and every size
+    # comparison (and therefore every group label) would be wrong.
     $backupHasAtt = $true
     try {
         $mf = Read-JsonFile (Join-Path $dir 'manifest.json')
@@ -3706,6 +3693,7 @@ function Get-SyncPlan([string]$name, [string]$product) {
             $backupHasAtt = [bool]$mf.includeAttachments
         }
     } catch { }
+    $out.backupHasAttachments = $backupHasAtt
 
     # Transcript sizes inside the backup. A session's "size" has to mean the same
     # thing on both sides or the comparison is meaningless. When the backup has
@@ -3713,16 +3701,19 @@ function Get-SyncPlan([string]$name, [string]$product) {
     # attachment folder; when it does not, the attachment folder is left out of
     # the local number too so the two are comparable.
     $srcProj = Join-Path $dir 'projects'
+    $items = New-Object System.Collections.Generic.List[object]
+    $g = @{ conflict = 0; backupBetter = 0; backupOnly = 0; localBetter = 0 }
     foreach ($row in $srcRows) {
         $sid = [string]$row.id
-        $out.total++
+        # Cloud conversations live on the server; the user asked to see only the
+        # backup's own (local) conversations, so leave cloud rows out entirely.
+        if ([string]$row.transport -eq 'cloud') { $out.cloudSkipped++; continue }
+
         $srcBytes = [long]0
-        $srcSlug = ''
         if (Test-Path -LiteralPath $srcProj) {
             foreach ($slugDir in @(Get-ChildItem -LiteralPath $srcProj -Directory -ErrorAction SilentlyContinue)) {
                 $cand = Join-Path $slugDir.FullName ($sid + '.jsonl')
                 if (Test-Path -LiteralPath $cand) {
-                    $srcSlug = $slugDir.Name
                     $srcBytes += (Get-Item -LiteralPath $cand).Length
                     $rb = Join-Path $slugDir.FullName ($sid + '.file-rollback.ndjson')
                     if (Test-Path -LiteralPath $rb) { $srcBytes += (Get-Item -LiteralPath $rb).Length }
@@ -3734,47 +3725,85 @@ function Get-SyncPlan([string]$name, [string]$product) {
         }
         $srcMs = [long]$row.updatedMs
 
-        $entry = [pscustomobject]@{
-            id         = $sid
-            title      = [string]$row.title
-            slug       = $srcSlug
-            srcBytes   = $srcBytes
-            srcMs      = $srcMs
-            srcAt      = [string]$row.updatedAt
-            dstBytes   = [long]0
-            dstMs      = [long]0
-            dstAt      = ''
-            verdict    = ''
+        # State fields come from the backup db when present; if an older schema
+        # lacks them they simply read back empty/false (Get-DbSessionsAt always
+        # returns the properties, defaulted).
+        $src = [pscustomobject]@{
+            bytes     = $srcBytes
+            ms        = $srcMs
+            at        = [string](ConvertFrom-Ms $srcMs)
+            archived  = [bool]$row.archived
+            deleted   = [bool]$row.deleted
+            transport = [string]$row.transport
+            status    = [string]$row.status
         }
-        if (-not $local.ContainsKey($sid)) {
-            $entry.verdict = 'add'
-            $out.backupOnly = @($out.backupOnly) + $entry
-            continue
+
+        $exists = $local.ContainsKey($sid)
+        $dstBytes = [long]0
+        $dstMs = [long]0
+        if ($exists) {
+            $l = $local[$sid]
+            # Match the backup's accounting (see $backupHasAtt above): Get-SessionsIndex
+            # unconditionally folds the attachment folder into `bytes`, so subtract it
+            # back out when this backup does not carry attachments.
+            $localBytes = [long]$l.bytes
+            if (-not $backupHasAtt -and $l.hasAttachments) {
+                $attDir = Join-Path (Join-Path $localProj ([string]$l.slug)) $sid
+                if (Test-Path -LiteralPath $attDir) { $localBytes = $localBytes - (Get-FolderSize $attDir) }
+            }
+            $dstBytes = $localBytes
+            $dstMs = [long]$l.updatedMs
+            $dst = [pscustomobject]@{
+                bytes     = $dstBytes
+                ms        = $dstMs
+                at        = [string]$l.updatedAt
+                archived  = [bool]$l.archived
+                deleted   = [bool]$l.deleted
+                transport = [string]$l.transport
+                status    = [string]$l.status
+                exists    = $true
+            }
+        } else {
+            # Not present locally: exists=false and every other dst field left empty/0.
+            $dst = [pscustomobject]@{
+                bytes     = [long]0
+                ms        = [long]0
+                at        = ''
+                archived  = $false
+                deleted   = $false
+                transport = ''
+                status    = ''
+                exists    = $false
+            }
         }
-        $l = $local[$sid]
-        # Match the backup's accounting (see $backupHasAtt above): Get-SessionsIndex
-        # unconditionally folds the attachment folder into `bytes`, so subtract it
-        # back out when this backup does not carry attachments.
-        $localBytes = [long]$l.bytes
-        if (-not $backupHasAtt -and $l.hasAttachments) {
-            $attDir = Join-Path (Join-Path $localProj ([string]$l.slug)) $sid
-            if (Test-Path -LiteralPath $attDir) { $localBytes = $localBytes - (Get-FolderSize $attDir) }
-        }
-        $entry.dstBytes = $localBytes
-        $entry.dstMs = [long]$l.updatedMs
-        $entry.dstAt = [string]$l.updatedAt
-        $entry.verdict = Compare-SyncCandidate $srcBytes $srcMs $localBytes ([long]$l.updatedMs)
-        switch ($entry.verdict) {
-            'push' { $out.push = @($out.push) + $entry }
-            'keep' { $out.keep = @($out.keep) + $entry }
-            default { $out.conflicts = @($out.conflicts) + $entry }
-        }
+
+        # Only a grouping suggestion, never a decision (see Get-RestoreGroup).
+        $group = Get-RestoreGroup $exists $srcBytes $srcMs $dstBytes $dstMs
+        $g[$group]++
+
+        $items.Add([pscustomobject]@{
+            id                   = $sid
+            title                = [string]$row.title
+            src                  = $src
+            dst                  = $dst
+            group                = $group
+            backupHasAttachments = $backupHasAtt
+            cloud                = $false
+        })
+    }
+    $out.items = $items.ToArray()
+    $out.total = $items.Count
+    $out.groups = [pscustomobject]@{
+        conflict     = $g.conflict
+        backupBetter = $g.backupBetter
+        backupOnly   = $g.backupOnly
+        localBetter  = $g.localBetter
     }
     return $out
 }
 
 
-function Merge-DbSessions([string]$product, [string]$srcDbPath, $UpdateIds = $null) {
+function Merge-DbSessions([string]$product, [string]$srcDbPath, $UpdateIds = $null, $SelectedIds = $null) {
     # "Fill in what is missing" for the database: copy the rows that the target
     # does not have yet, leave everything else alone.
     # The two editions may not be on the same schema version, so only the columns
@@ -3785,7 +3814,16 @@ function Merge-DbSessions([string]$product, [string]$srcDbPath, $UpdateIds = $nu
     # backup even though the target already has an id-equal row. Rows outside the
     # set keep the old insert-only behaviour, and nothing is ever deleted either
     # way. Returns insert/update/unchanged counts so the caller can report what
-    # actually happened instead of guessing.
+    # actually happened instead of guessing. (Kept for the legacy path; custom
+    # restore uses -SelectedIds below, which is strictly narrower.)
+    #
+    # -SelectedIds is custom restore: restore EXACTLY that id set from the backup
+    # and touch NOTHING else. Unlike the plain merge it does NOT insert every
+    # missing backup row - an unselected backup-only conversation must stay
+    # absent locally, and a local-only conversation must never be deleted. Each
+    # selected id is DELETEd (if present locally) then re-INSERTed from the
+    # backup, so an existing row is overwritten and an absent one is added, with
+    # no double counting between the two. Returns the applied row count.
     $db = Open-WbDatabase $product
     try {
         $dstCols = @([WbSqlite]::Query($db, 'PRAGMA table_info(sessions)', $null) | ForEach-Object { [string]$_['name'] })
@@ -3801,13 +3839,45 @@ function Merge-DbSessions([string]$product, [string]$srcDbPath, $UpdateIds = $nu
             $inserted = 0
             $updated = 0
             $unchanged = 0
+            $applied = 0
             [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
             try {
-                # 1. everything the target does not have yet
-                $inserted = [WbSqlite]::Exec($db,
-                    ("INSERT OR IGNORE INTO sessions ({0}) SELECT {0} FROM src.sessions" -f $colList), $null)
+                if ($null -ne $SelectedIds) {
+                    # CUSTOM RESTORE: only the ids the user picked. DELETE the
+                    # local copy (when one exists) then INSERT the backup's row.
+                    # The DELETE is guarded by EXISTS so it only removes a row
+                    # that the backup actually has; the INSERT only pulls rows
+                    # whose id is in the set. Rows outside the set - local-only
+                    # conversations and unselected backup conversations - are
+                    # never touched. Same DELETE + INSERT trick as the sync path
+                    # (UPDATE ... FROM needs SQLite 3.33+), chunked to stay under
+                    # the variable limit. Identifiers come from PRAGMA; id values
+                    # are bound as parameters, never interpolated.
+                    $ids = @()
+                    foreach ($k in $SelectedIds.Keys) { $s = [string]$k; if ($s) { $ids += $s } }
+                    if ($ids.Count -gt 0) {
+                        $chunk = 400
+                        for ($i = 0; $i -lt $ids.Count; $i += $chunk) {
+                            $tail = @($ids[$i..([Math]::Min($i + $chunk - 1, $ids.Count - 1))])
+                            $ph = @()
+                            for ($k = 0; $k -lt $tail.Count; $k++) { $ph += ('?{0}' -f ($k + 1)) }
+                            $inList = ($ph -join ', ')
+                            [void][WbSqlite]::Exec($db,
+                                ("DELETE FROM sessions WHERE id IN ({0}) AND EXISTS (SELECT 1 FROM src.sessions WHERE src.sessions.id = sessions.id)" -f $inList),
+                                $tail)
+                            $applied += [WbSqlite]::Exec($db,
+                                ("INSERT INTO sessions ({0}) SELECT {0} FROM src.sessions WHERE id IN ({1})" -f $colList, $inList),
+                                $tail)
+                        }
+                    }
+                } else {
+                    # 1. everything the target does not have yet (plain merge and
+                    #    the legacy -UpdateIds path both fill in missing rows)
+                    $inserted = [WbSqlite]::Exec($db,
+                        ("INSERT OR IGNORE INTO sessions ({0}) SELECT {0} FROM src.sessions" -f $colList), $null)
+                }
 
-                if ($null -ne $UpdateIds) {
+                if ($null -eq $SelectedIds -and $null -ne $UpdateIds) {
                     # 2. the rows the sync chose to overwrite: delete the local
                     #    copy, then take the backup's. DELETE + INSERT rather
                     #    than UPDATE ... FROM because the latter needs SQLite
@@ -3855,7 +3925,8 @@ function Merge-DbSessions([string]$product, [string]$srcDbPath, $UpdateIds = $nu
             [void][WbSqlite]::Query($db, 'PRAGMA wal_checkpoint(TRUNCATE)', $null)
             $chk = [WbSqlite]::Query($db, 'PRAGMA integrity_check', $null)
             if (-not $chk.Count -or [string]$chk[0]['integrity_check'] -ne 'ok') { throw 'integrity_check_failed' }
-            Write-Log ("db merge: {0} rows inserted from {1} (updated={2})" -f $inserted, $srcDbPath, $updated)
+            Write-Log ("db merge: {0} rows inserted from {1} (updated={2} applied={3})" -f $inserted, $srcDbPath, $updated, $applied)
+            if ($null -ne $SelectedIds) { return [pscustomobject]@{ applied = $applied } }
             if ($null -ne $UpdateIds) {
                 return [pscustomobject]@{ inserted = $inserted; updated = $updated; unchanged = $unchanged }
             }
@@ -5436,7 +5507,7 @@ function Get-BackupDbDetail([string]$name, [string]$edition = '') {
     return $out
 }
 
-function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$targetEdition) {
+function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$targetEdition, $CustomIds = $null) {
     $dir = Join-Path $BackupsDir $name
     if (-not (Test-Path -LiteralPath $dir)) { throw 'backup_missing' }
     $mf = Read-JsonFile (Join-Path $dir 'manifest.json')
@@ -5458,6 +5529,56 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
         $crossEdition = $true
     }
     $edHome = Get-EditionHome $product
+
+    # Custom restore: resolve the user's id set against the SAME full plan the
+    # dialog showed (cloud rows excluded), BEFORE touching anything. Ids outside
+    # the backup, duplicates and cloud ids are simply ignored. The counts come
+    # from the plan so they match the list the user saw even when the backup has
+    # no database at all.
+    $validSelected = @{}
+    $customPushed = 0
+    $customAdded = 0
+    $customKept = 0
+    if ($mode -eq 'custom') {
+        if ($null -eq $CustomIds) { $CustomIds = @{} }
+        $plan = Get-RestorePlan $name $product
+        foreach ($item in @($plan.items)) {
+            $iid = [string]$item.id
+            if ($CustomIds.ContainsKey($iid)) { $validSelected[$iid] = $true }
+        }
+        foreach ($item in @($plan.items)) {
+            $iid = [string]$item.id
+            if (-not $validSelected.ContainsKey($iid)) { continue }
+            if ($item.dst.exists) { $customPushed++ } else { $customAdded++ }
+        }
+        $customKept = [int]$plan.total - $validSelected.Count
+
+        # Nothing selected (or every submitted id was bogus): do absolutely
+        # nothing - no client shutdown, no pre-restore snapshot, no writes.
+        if ($validSelected.Count -eq 0) {
+            return [pscustomobject]@{
+                ok            = $true
+                mode          = $mode
+                edition       = $product
+                sourceEdition = $sourceEdition
+                crossEdition  = $crossEdition
+                home          = $edHome
+                files         = 0
+                merged        = 0
+                customPushed  = 0
+                customAdded   = 0
+                customKept    = $customKept
+                sessions      = @($mf.sessions).Count
+                remapDone     = $false
+                remapReason   = ''
+                preBackup     = ''
+                restarted     = $false
+                clientExe     = ''
+                clientWasOpen = $false
+            }
+        }
+    }
+
     $procName = Get-ProductProc $product
 
     $wasRunning = ((Get-ClientProcesses $procName).Count -gt 0)
@@ -5469,15 +5590,15 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
     # safety net: snapshot the current state first.
     # A cross edition restore always takes one, even in merge mode, because it may
     # mix data from two different clients.
-    # Sync mode takes one too, unconditionally: it OVERWRITES conversations that
-    # exist locally, so it is as destructive as a full restore even though it
-    # leaves the conversations it did not pick alone.
+    # Custom mode takes one too, unconditionally: it OVERWRITES the conversations
+    # the user selected, so it is as destructive as a full restore on those rows
+    # even though it leaves every other conversation alone.
     # A failed snapshot ABORTS: everything after this point overwrites or merges
     # into workbuddy.db and copies files in. Restoring is the one operation the
     # user cannot hand-undo, so it must not proceed without the rollback point it
     # was promised. Nothing has been touched yet, so stopping here is clean.
     $pre = $null
-    if ($mode -eq 'full' -or $mode -eq 'sync' -or $crossEdition) {
+    if ($mode -eq 'full' -or $mode -eq 'custom' -or $crossEdition) {
         try {
             $pre = New-Backup ([bool]$mf.includeAttachments) 'pre-restore' '' $product
         } catch {
@@ -5488,18 +5609,9 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
 
     $restored = 0
     $merged = 0
-    $syncPushed = 0
-    $syncKept = 0
-    $syncAdded = 0
-    # In sync mode the set of conversations to overwrite is decided BEFORE
-    # anything is written, from the same survey the dialog showed the user.
-    $syncPushIds = @{}
-    $syncConflictIds = @{}
-    if ($mode -eq 'sync') {
-        $plan = Get-SyncPlan $name $product
-        foreach ($e in @($plan.push))      { $syncPushIds[[string]$e.id] = $true }
-        foreach ($e in @($plan.conflicts)) { $syncConflictIds[[string]$e.id] = $true }
-    }
+    # $validSelected and the custom* counts were resolved above (before any
+    # write); nothing to recompute here. The old time-based sync decided the
+    # overwrite set here from an automatic verdict - custom restore does not.
     $remapDone = $false
     $remapReason = ''
     $hasWal = (Test-Path -LiteralPath (Join-Path $dir 'workbuddy.db-wal'))
@@ -5536,15 +5648,12 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                 Remove-Item -LiteralPath ($dbDst + '-wal') -Force -ErrorAction SilentlyContinue
                 Remove-Item -LiteralPath ($dbDst + '-shm') -Force -ErrorAction SilentlyContinue
                 Copy-Item -LiteralPath $stageDb -Destination $dbDst -Force
-            } elseif ($mode -eq 'sync') {
-                # Rows the plan decided to push get refreshed from the backup;
-                # rows it kept or left to the user stay exactly as they are, and
-                # nothing is ever removed - a sync that deleted local rows would
-                # be a full restore wearing a different name.
-                $syncRes = Merge-DbSessions $product $stageDb -UpdateIds $syncPushIds
-                $merged = [int]$syncRes.inserted
-                $syncPushed = [int]$syncRes.updated
-                $syncKept = [int]$syncRes.unchanged
+            } elseif ($mode -eq 'custom') {
+                # Refresh ONLY the ids the user selected. Merge-DbSessions with
+                # -SelectedIds never inserts unselected backup-only rows and never
+                # deletes local-only rows, so this stays a true custom restore.
+                # Counts were derived from the plan above, not from this call.
+                [void](Merge-DbSessions $product $stageDb -SelectedIds $validSelected)
             } else {
                 $merged = Merge-DbSessions $product $stageDb
             }
@@ -5567,18 +5676,15 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
             foreach ($f in @(Get-ChildItem -LiteralPath $slugDir.FullName -File -ErrorAction SilentlyContinue)) {
                 $target = Join-Path $dst $f.Name
                 if ($mode -eq 'merge' -and (Test-Path -LiteralPath $target)) { continue }
-                if ($mode -eq 'sync') {
-                    # Only overwrite the transcripts belonging to a conversation
-                    # the plan decided to push. A conflict goes untouched: the
-                    # user explicitly chose to leave it alone, and replacing the
-                    # file behind their back would make that choice a lie.
-                    # Files of backup-only conversations are not listed in
-                    # syncPushIds, but they are not present locally either, so
-                    # the "target exists" guard below lets them through.
+                if ($mode -eq 'custom') {
+                    # Copy a transcript only when its session id was selected.
+                    # No "target exists" exception: an UNSELECTED backup-only
+                    # conversation must stay absent locally, so its file is not
+                    # copied either. The .file-rollback companion shares the id.
                     $base = [IO.Path]::GetFileNameWithoutExtension($f.Name)
                     $sid = $base
                     if ($base.EndsWith('.file-rollback')) { $sid = $base.Substring(0, $base.Length - '.file-rollback'.Length) }
-                    if ((Test-Path -LiteralPath $target) -and -not $syncPushIds.ContainsKey($sid)) { continue }
+                    if (-not $validSelected.ContainsKey($sid)) { continue }
                 }
                 Copy-Item -LiteralPath $f.FullName -Destination $target -Force
                 $restored++
@@ -5586,15 +5692,11 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
             foreach ($sd in @(Get-ChildItem -LiteralPath $slugDir.FullName -Directory -ErrorAction SilentlyContinue)) {
                 $target = Join-Path $dst $sd.Name
                 if ($mode -eq 'merge' -and (Test-Path -LiteralPath $target)) { continue }
-                if ($mode -eq 'sync') {
-                    # The attachment folder is named after the session id, and it
-                    # needs the SAME filter the transcript loop above applies:
-                    # without it a "keep" or "conflict" session had its
-                    # attachments merged in even though the dialog promised that
-                    # conversation would be left alone. A backup-only session is
-                    # not in syncPushIds but is not present locally either, so
-                    # the "target exists" guard still lets it through.
-                    if ((Test-Path -LiteralPath $target) -and -not $syncPushIds.ContainsKey($sd.Name)) { continue }
+                if ($mode -eq 'custom') {
+                    # The attachment folder is named after the session id; copy
+                    # it only for a selected conversation, same rule as the
+                    # transcript loop above.
+                    if (-not $validSelected.ContainsKey($sd.Name)) { continue }
                 }
                 Copy-Tree $sd.FullName $target
             }
@@ -5611,7 +5713,11 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
             if (-not (Test-Path -LiteralPath $dstU)) { New-Item -ItemType Directory -Path $dstU -Force | Out-Null }
             $dstSnap = Join-Path $dstU 'sidebar-list-snapshot.json'
             if ($mode -eq 'merge' -and (Test-Path -LiteralPath $dstSnap)) { continue }
-            if ($mode -eq 'sync' -and (Test-Path -LiteralPath $dstSnap)) { continue }
+            # A sidebar snapshot is an account-wide rendering cache covering ALL
+            # conversations, not one row. In custom mode copying it would change
+            # the titles of conversations the user did NOT select, so skip it
+            # entirely - the client rebuilds the cache from the database anyway.
+            if ($mode -eq 'custom') { continue }
             Copy-Item -LiteralPath $snap -Destination $dstSnap -Force
         }
     }
@@ -5621,7 +5727,7 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
 
     # Deliberately NOT restarting the client here: the page asks the user whether
     # to open it, and only starts it if they say yes.
-    Write-Log ("restore done: {0} edition={1} from={2} cross={3} mode={4} files={5} merged={6} remap={7} pushed={8} kept={9}" -f $name, $product, $sourceEdition, $crossEdition, $mode, $restored, $merged, $remapDone, $syncPushed, $syncKept)
+    Write-Log ("restore done: {0} edition={1} from={2} cross={3} mode={4} files={5} merged={6} remap={7} pushed={8} added={9} kept={10}" -f $name, $product, $sourceEdition, $crossEdition, $mode, $restored, $merged, $remapDone, $customPushed, $customAdded, $customKept)
     return [pscustomobject]@{
         ok            = $true
         mode          = $mode
@@ -5631,9 +5737,9 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
         home          = $edHome
         files         = $restored
         merged        = $merged
-        syncPushed    = $syncPushed
-        syncKept      = $syncKept
-        syncConflicts = $syncConflictIds.Count
+        customPushed  = $customPushed
+        customAdded   = $customAdded
+        customKept    = $customKept
         sessions      = @($mf.sessions).Count
         remapDone     = $remapDone
         remapReason   = $remapReason
@@ -6025,11 +6131,12 @@ function Invoke-Api([string]$path, $query, $req) {
             return [pscustomobject]@{ ok = $true; backup = $meta }
         }
 
-        '/api/backup/sync-plan' {
-            # Read-only: what would "sync by time" do to this backup? The dialog
-            # shows the counts (and the conflict list) BEFORE the user commits,
-            # and Restore-Backup recomputes the same plan so what was shown is
-            # what gets applied.
+        '/api/backup/restore-plan' {
+            # Read-only FULL list of the backup's own conversations (cloud rows
+            # excluded). The dialog shows every one of them and lets the user pick,
+            # per conversation, whether to use the backup copy. No truncation here
+            # and nothing is written. Restore-Backup mode='custom' recomputes the
+            # same plan with the same edition before applying the user's id set.
             $name = ''
             if ($body) { $name = [string]$body.name }
             $target = ''
@@ -6043,37 +6150,16 @@ function Invoke-Api([string]$path, $query, $req) {
                 if ($mf -and $mf.edition) { $ed = [string]$mf.edition }
                 if (-not (Test-Edition $ed)) { $ed = Get-ActiveEdition }
             }
-            $plan = Get-SyncPlan $name $ed
-            # Only what the dialog needs: id, title, both sides' size/time. The
-            # n/m lists can be long, so they are truncated here rather than in
-            # the renderer.
-            $mk = {
-                param($arr, $max)
-                $o = New-Object System.Collections.Generic.List[object]
-                $i = 0
-                foreach ($e in @($arr)) {
-                    if ($i -ge $max) { break }
-                    $o.Add([pscustomobject]@{
-                        id = $e.id; title = $e.title
-                        srcBytes = $e.srcBytes; dstBytes = $e.dstBytes
-                        srcAt = $e.srcAt; dstAt = $e.dstAt
-                    })
-                    $i++
-                }
-                return ,$o.ToArray()
-            }
+            $plan = Get-RestorePlan $name $ed
             return [pscustomobject]@{
-                ok          = $true
-                edition     = $ed
-                hasBackupDb = $plan.hasBackupDb
-                total       = $plan.total
-                pushCount   = @($plan.push).Count
-                keepCount   = @($plan.keep).Count
-                addCount    = @($plan.backupOnly).Count
-                conflictCount = @($plan.conflicts).Count
-                push        = & $mk $plan.push 200
-                conflicts   = & $mk $plan.conflicts 200
-                backupOnly  = & $mk $plan.backupOnly 200
+                ok                   = $true
+                edition              = $ed
+                total                = $plan.total
+                hasBackupDb          = $plan.hasBackupDb
+                backupHasAttachments = $plan.backupHasAttachments
+                cloudSkipped         = $plan.cloudSkipped
+                groups               = $plan.groups
+                items                = $plan.items
             }
         }
 
@@ -6082,12 +6168,34 @@ function Invoke-Api([string]$path, $query, $req) {
             if ($body) { $name = [string]$body.name }
             $mode = 'full'
             if ($body -and $body.mode) { $mode = [string]$body.mode }
-            if ($mode -notin @('full', 'merge', 'sync')) { throw 'bad_mode' }
+            # 'sync' (time-based, backend-decided) was removed; custom restore
+            # replaces it. full and merge are unchanged.
+            if ($mode -notin @('full', 'merge', 'custom')) { throw 'bad_mode' }
             $remap = $false
             if ($body -and $null -ne $body.remap) { $remap = [bool]$body.remap }
             $target = ''
             if ($body -and $body.target) { $target = [string]$body.target }
-            $r = Restore-Backup $name $mode $remap $target
+
+            # mode='custom' carries the explicit set of ids the user chose to
+            # overwrite with the backup. Validate at the boundary: it must be a
+            # real JSON array of non-empty strings, capped to prevent abuse. Ids
+            # that do not exist in the backup are silently ignored downstream
+            # (Restore-Backup intersects them with the restore plan).
+            $customIds = @{}
+            if ($mode -eq 'custom') {
+                if ($null -eq $body -or $null -eq $body.PSObject.Properties['selectedIds']) { throw 'selected_ids_required' }
+                $raw = $body.selectedIds
+                if ($null -eq $raw -or $raw -is [string]) { throw 'selected_ids_must_be_array' }
+                $arr = @($raw)
+                if ($arr.Count -gt 5000) { throw 'too_many_selected' }
+                foreach ($x in $arr) {
+                    if ($x -isnot [string]) { throw 'selected_ids_must_be_array' }
+                    $s = [string]$x
+                    if (-not $s.Trim()) { throw 'selected_ids_invalid' }
+                    $customIds[$s] = $true
+                }
+            }
+            $r = Restore-Backup $name $mode $remap $target $customIds
             return $r
         }
 
