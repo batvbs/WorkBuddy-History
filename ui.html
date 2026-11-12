@@ -2004,7 +2004,7 @@ async function restoreDialog(name){
         <div class="crow-h"><span class="cname" title="${esc(it.title || it.id)}">${esc(it.title || it.id)}</span></div>
         <div class="cpick">
           <label class="cside ${on==='backup'?'on':''}" data-side="backup">
-            <span class="cradio"><input type="radio" name="cr_${idx}" value="backup" ${on==='backup'?'checked':''}> 备份${badges(s)}</span>
+            <span class="cradio"><input type="radio" name="cr_${idx}" value="backup" ${on==='backup'?'checked':''} aria-label="${esc((it.title || it.id) + '：用备份覆盖')}"> 备份${badges(s)}</span>
             <span class="cmeta">
               <span class="cln">更新：<span class="at ${c.newer==='backup'?'newer':''}">${esc(s.at || '—')}</span></span>
               <span class="cln">大小：<span class="sz ${c.bigger==='backup'?'bigger':''}">${fmtBytes(s.bytes)}</span></span>
@@ -2012,7 +2012,7 @@ async function restoreDialog(name){
             </span>
           </label>
           <label class="cside ${on==='local'?'on':''}" data-side="local">
-            <span class="cradio"><input type="radio" name="cr_${idx}" value="local" ${on==='local'?'checked':''}> 本地${c.exists?badges(d):''}</span>
+            <span class="cradio"><input type="radio" name="cr_${idx}" value="local" ${on==='local'?'checked':''} aria-label="${esc((it.title || it.id) + '：保留本机这份')}"> 本地${c.exists?badges(d):''}</span>
             <span class="cmeta">
               ${c.exists
                 ? `<span class="cln">更新：<span class="at ${c.newer==='local'?'newer':''}">${esc(d.at || '—')}</span></span>
