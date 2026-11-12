@@ -210,6 +210,8 @@
   .sess-row{border-bottom:1px solid var(--line-2)}
   .sess-row:last-child{border-bottom:0}
   .sess-row:hover{background:#f8fafd}
+  /* 刚创建的副本：短暂高亮一下，否则几十条里根本注意不到它 */
+  .sess-row.flash{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
   .sess-row .t{min-width:0}
   .sess-row .t b{display:block;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sess-row .t .ttl{display:flex;align-items:center;gap:5px;min-width:0}
@@ -2491,8 +2493,9 @@ $('#btnAllSessions').onclick = async ()=>{
   }
   busy(false);
 
-  const list = asArr(r.sessions);
-  const accounts = asArr(r.accounts);
+  // let：分叉和客户端开关之后会整份重拉，替换这两个数组
+  let list = asArr(r.sessions);
+  let accounts = asArr(r.accounts);
   const curUid = (r.current && r.current.uid) || '';
   // let：底部状态栏的「打开 / 关闭客户端」会更新它，列表的锁定状态跟着变
   let running = !!r.running;
@@ -2561,7 +2564,7 @@ $('#btnAllSessions').onclick = async ()=>{
     const sub = where ? (s.id.slice(0,8) + ' · ' + where) : s.id.slice(0,8);
     const seg = statusCell(s, !locked, s.cloud ? '云端对话存在服务端，本地改不了'
                  : (running ? '客户端正在运行，关闭后可切换' : '点击切换状态'));
-    return `<div class="sess-row">
+    return `<div class="sess-row" data-row="${esc(s.id)}">
       <div class="t"><div class="ttl">${forkBtn}<b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
         <span${where ? ` title="${esc(where)}"` : ''}>${esc(sub)}</span></div>
       <div class="num">${fmtBytes(s.bytes)}</div>
@@ -2661,7 +2664,7 @@ $('#btnAllSessions').onclick = async ()=>{
       rec.archived = res.state === 'archived';
       rec.deleted = res.state === 'deleted';
       changed = true;
-      renderFilters(); paint();
+      repaint();
       toast('已切换为「' + SEG_NAME[res.state] + '」', 'ok');
     }catch(err){
       toast('切换失败：' + errText(err.message), 'err');
@@ -2699,16 +2702,18 @@ $('#btnAllSessions').onclick = async ()=>{
       btn.disabled = true;
       try{
         const res = await api('/api/sessions/fork', { edition: r.edition || state.edition, id: rec.id });
-        // 副本继承原行的归属 / 目录 / 状态（完整复制），列表本地插入免重拉
-        list.push({ id: res.id, title: res.title, uid: rec.uid, mine: rec.mine,
-                    nickname: rec.nickname, shortUid: rec.shortUid,
-                    slug: rec.slug, space: rec.space, bytes: rec.bytes,
-                    updatedMs: rec.updatedMs, state: rec.state,
-                    archived: rec.archived, deleted: rec.deleted,
-                    cloud: false, edition: rec.edition, hasAttachments: rec.hasAttachments });
         changed = true;
         close();
-        renderFilters(); paint();
+        // 整份重拉而不是本地 push 一行：副本的真实大小 / 时间以库里的为准，
+        // 顺序也回到后端那份（按更新时间排，副本紧挨着原对话）。
+        await reloadList();
+        // 自动滚到副本并闪一下：列表可能有几十条，副本不在视野里就等于「没反应」。
+        const row = document.querySelector('.sess-row[data-row="' + CSS.escape(res.id) + '"]');
+        if(row){
+          try { row.scrollIntoView({ block: 'center' }); } catch(e) { row.scrollIntoView(); }
+          row.classList.add('flash');
+          setTimeout(()=> row.classList.remove('flash'), 1800);
+        }
         toast('已创建分叉副本', 'ok');
       }catch(err){
         btn.disabled = false;
@@ -2726,6 +2731,8 @@ $('#btnAllSessions').onclick = async ()=>{
   }
 
   /* ---- 底部状态栏：开 / 关客户端（复用账号切换页的同一组 API） ---- */
+  // 只更新「按钮文案 + 副标题」这类外壳。列表和筛选的重绘交给 repaint，
+  // 分开是为了避免一次操作里重绘两遍（曾经导致上层还没写完就被下层覆盖）。
   function refreshClientUI(){
     const t = $('#btnClientToggle');
     if(t) t.textContent = running ? '关闭客户端' : '打开客户端';
@@ -2733,7 +2740,37 @@ $('#btnAllSessions').onclick = async ()=>{
     if(sub) sub.innerHTML = `${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
       ? '客户端正在运行，状态列暂时只读'
       : '客户端未打开，点状态列可直接切换'}`;
-    renderFilters(); paint();
+  }
+
+  // 统一重绘：外壳 + 筛选 + 列表。任何一步出错都要能被看见（toast + console），
+  // 不能像以前那样静默半途而废——用户会以为操作没生效，只能关窗重开。
+  function repaint(){
+    try{
+      refreshClientUI();
+      renderFilters();
+      paint();
+    }catch(e){
+      console.error('[repaint]', e);
+      toast('界面刷新失败：' + (e && e.message ? e.message : e), 'err');
+    }
+  }
+
+  // 操作完成后整份重拉：分叉 / 开关客户端都会改变列表内容或锁定状态，
+  // 用后端返回的真实数据重绘，比在本地拼一行更可靠（也拿到了副本的真实大小）。
+  async function reloadList(){
+    try{
+      const fresh = await api('/api/sessions/all' + (state.edition ? '?edition=' + encodeURIComponent(state.edition) : ''));
+      list = asArr(fresh.sessions);
+      accounts = asArr(fresh.accounts);
+      running = !!fresh.running;
+      // 原来筛的账号如果已经不在了（换号 / 重拉后消失），回落到「全部」，
+      // 否则列表会莫名其妙变成空的
+      if(filter.acc !== '*' && !accounts.some(a => (a.uid || '') === filter.acc)) filter.acc = '*';
+      repaint();
+    }catch(e){
+      console.error('[reloadList]', e);
+      toast('列表刷新失败：' + errText(e.message), 'err');
+    }
   }
   $('#btnClientToggle').onclick = async ()=>{
     if(running){
@@ -2757,7 +2794,9 @@ $('#btnAllSessions').onclick = async ()=>{
         busy(true, '正在关闭客户端…', '关闭 ' + prodName(r.edition || state.edition));
         try{
           await api('/api/client/stop', { product: r.edition || state.edition });
-          running = false; changed = true; close(); refreshClientUI();
+          changed = true; close();
+          // 用后端重拉后的 running 为准，不靠本地猜
+          await reloadList();
           toast('已关闭客户端', 'ok');
         }catch(e){ toast('关闭失败：' + errText(e.message), 'err'); }
         finally{ busy(false); }
@@ -2768,7 +2807,8 @@ $('#btnAllSessions').onclick = async ()=>{
     try{
       const res = await api('/api/client/start', { product: r.edition || state.edition });
       if(!res.started){ toast('没能启动：' + errText(res.reason || 'start_timeout'), 'err'); return; }
-      running = true; changed = true; refreshClientUI();
+      changed = true;
+      await reloadList();
       toast('已打开客户端', 'ok');
     }catch(e){ toast('操作失败：' + errText(e.message), 'err'); }
     finally{ busy(false); }
