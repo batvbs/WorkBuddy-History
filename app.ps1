@@ -4421,6 +4421,7 @@ function Fork-Session([string]$product, [string]$id) {
         }
 
         [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
+        $committed = $false
         try {
             # Copy every column of the source row except id, which gets the new
             # UUID. Columns come from PRAGMA, never from user input; both ids are
@@ -4459,20 +4460,27 @@ function Fork-Session([string]$product, [string]$id) {
                 $att = Join-Path $slugDir $id
                 if (Test-Path -LiteralPath $att) {
                     $dstAtt = Join-Path $slugDir $newId
-                    Copy-Tree $att $dstAtt
+                    # Strict copy: Copy-Tree swallows non-terminating errors on
+                    # purpose (attachment caches tolerate gaps in other flows),
+                    # but a fork must not report success with a partial
+                    # attachment directory. Errors must reach the rollback.
+                    New-Item -ItemType Directory -Path $dstAtt -Force | Out-Null
+                    foreach ($c in @(Get-ChildItem -LiteralPath $att -Force -ErrorAction SilentlyContinue)) {
+                        Copy-Item -LiteralPath $c.FullName -Destination $dstAtt -Recurse -Force -ErrorAction Stop
+                    }
                     $copied.Add($dstAtt)
                 }
             }
             [void][WbSqlite]::Exec($db, 'COMMIT', $null)
-            # Same close-out as the other direct writers (Set-SessionState,
-            # purge, recover): flush the WAL so the client / our own index see
-            # the fork immediately, and drop the 10s session cache so the page
-            # reload after this dialog closes does not serve stale totals.
-            [void][WbSqlite]::Query($db, 'PRAGMA wal_checkpoint(TRUNCATE)', $null)
-            $script:SessionCache = @{}
-            $script:SessionCacheAt = @{}
+            $committed = $true
         } catch {
-            [void][WbSqlite]::Exec($db, 'ROLLBACK', $null)
+            # ROLLBACK only when the transaction is actually still open: a
+            # failure AFTER the commit (nothing does that today, but keep the
+            # order safe) must not turn a committed fork into a reported
+            # failure, and a failing ROLLBACK must not skip the file cleanup.
+            if (-not $committed) {
+                try { [void][WbSqlite]::Exec($db, 'ROLLBACK', $null) } catch { Write-Log ('fork rollback: ' + $_.Exception.Message) }
+            }
             foreach ($p in $copied) {
                 try {
                     if ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p).PSIsContainer) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
@@ -4481,6 +4489,16 @@ function Fork-Session([string]$product, [string]$id) {
             }
             throw
         }
+        # Close-out after a successful commit, same as the other direct writers
+        # (Set-SessionState, purge, recover): flush the WAL so the client / our
+        # own index see the fork immediately, and drop the 10s session cache so
+        # the page reload after this dialog closes does not serve stale totals.
+        # A failure here is logged only - the fork IS committed, reporting it as
+        # a failure would invite a retry that creates a second copy.
+        try { [void][WbSqlite]::Query($db, 'PRAGMA wal_checkpoint(TRUNCATE)', $null) }
+        catch { Write-Log ('fork checkpoint: ' + $_.Exception.Message) }
+        $script:SessionCache = @{}
+        $script:SessionCacheAt = @{}
         return [pscustomobject]@{ ok = $true; id = $newId; title = $newTitle }
     } finally {
         [WbSqlite]::Close($db)

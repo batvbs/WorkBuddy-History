@@ -1954,7 +1954,7 @@ async function restoreDialog(name){
     { key:'conflict',     label:'日期和大小不一致',       open:true,  def:'none' },
     { key:'backupBetter', label:'备份里更新更大',         open:false, def:'backup' },
     { key:'backupOnly',   label:'仅备份存在，本地缺失',   open:false, def:'backup' },
-    { key:'localBetter',  label:'备份无差异或更旧且更小', open:false, def:'local' }
+    { key:'localBetter',  label:'时间和大小相同，或备份更旧且更小', open:false, def:'local' }
   ];
   const GROUP_KEYS = GROUPS.map(g=>g.key);
   const GROUP_DEF = {}; GROUPS.forEach(g=>{ GROUP_DEF[g.key]=g.def; });
