@@ -388,6 +388,9 @@
   .cside{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:3px;padding:6px 9px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:#fff;font-size:11.5px;color:var(--muted)}
   .cside:hover{border-color:#d3dcea;background:#fbfcfe}
   .cside.on{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent)}
+  /* 自定义恢复清单：单独 640px，不影响 .wide / .xwide 的其它弹窗 */
+  .modal.cust-modal{width:640px;max-width:calc(100vw - 32px)}
+  .cust-pick{font-size:12.5px;font-weight:600;color:var(--accent);margin-left:4px}
   .cradio{display:inline-flex;align-items:center;gap:5px;font-weight:600;color:var(--text)}
   .cradio input{margin:0}
   .cmeta{display:flex;flex-wrap:wrap;gap:1px 12px}
@@ -1974,7 +1977,7 @@ async function restoreDialog(name){
         </span></label>`;
     modal(`
       <div class="modal-h">
-        <div><h3>你要恢复哪些对话？</h3>
+        <div><h3>你要恢复哪些对话？<span id="custPick" class="cust-pick">（0/0）</span></h3>
           <p>${esc(prodName(bEd))} · ${esc(bk.createdAt || name)} · 只列出备份里的对话，本机独有的不会显示、也不会删除</p></div>
         <button class="x" data-close>&times;</button>
       </div>
@@ -1988,7 +1991,10 @@ async function restoreDialog(name){
           <button class="btn" data-close>取消</button>
           <button class="btn primary" id="doCustomRestore" disabled>确认恢复</button>
         </div>
-      </div>`, { xwide:true });
+      </div>`);
+    // 这个清单只要 640px：两栏对照 + 四组折叠，900 太宽、700 太挤。
+    // 单独加一个类而不是改 .xwide，别的弹窗（备份查看、查看全部）继续用 900。
+    $('#modal').classList.add('cust-modal');
 
     let rows = [], choices = {}, plan = null;
     const body = $('#custBody');
@@ -2056,10 +2062,17 @@ async function restoreDialog(name){
         cb.checked = range.length>0 && picked===range.length;
         cb.indeterminate = picked>0 && picked<range.length;
       });
+      // 标题右侧的（已选备份 / 全部）：左边是这次会用备份覆盖的条数
+      const n = rows.filter(r=>choices[r.idx]==='backup').length;
+      const pick = $('#custPick');
+      if(pick) pick.textContent = '（' + n + '/' + rows.length + '）';
       const cnt = $('#custCount');
       if(cnt) cnt.textContent = (plan && plan.hasBackupDb === false)
         ? '无法逐条选择'
-        : `将用备份覆盖 ${rows.filter(r=>choices[r.idx]==='backup').length} 个对话，其余不动`;
+        : `将用备份覆盖 ${n} 个对话，其余不动`;
+      // 一个都没选时不让点确认：那是一次什么都没发生的恢复，按钮亮着只会让人以为点了有事发生
+      const goBtn = $('#doCustomRestore');
+      if(goBtn) goBtn.disabled = (plan && plan.hasBackupDb === false) || n === 0;
     }
     // 全选框：勾上=范围内全设为该侧；取消=把范围内当前该侧的项清成「都不选」。
     function setAll(scope, g, side, on){
@@ -2121,12 +2134,14 @@ async function restoreDialog(name){
       choices = {};
       rows.forEach(r=>{ choices[r.idx] = GROUP_DEF[r.group]; });
 
-      const dbNote = plan.hasBackupDb ? '' : '<br><b>这份备份里没有对话数据库，无法逐条选择。</b>请关闭本窗口，改用「完整恢复」或「仅补齐缺失」。';
+      // 顶部不再放整段说明（原先那句「备份里共 N 个对话…不选=按组默认」已去掉，
+      // 数量改到标题右侧的（已选/总数），分组规则看组名即可）。只保留真正
+      // 影响操作的两种例外提示。
+      const dbNote = plan.hasBackupDb ? '' : `<div class="note warn"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div><b>这份备份里没有对话数据库</b>，无法逐条选择。请关闭本窗口，改用「完整恢复」或「仅补齐缺失」。</div></div>`;
       const noAttNote = plan.backupHasAttachments === false
-        ? '<br>这份备份<b>不带附件</b>，备份侧会标注「无附件」。' : '';
-      const noteHtml = `<div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
-        <div>备份里共 <b>${rows.length}</b> 个对话（不含云端）：只列出备份里的对话，本机独有的不会显示、也不会删除。
-        每组可展开/折叠；<b>「不选 = 按组默认」</b>——没改动的条目按该组预选执行。${dbNote}${noAttNote}</div></div>`;
+        ? `<div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+        <div>这份备份<b>不带附件</b>，备份侧会标注「无附件」。</div></div>` : '';
       const headHtml = `<div class="chead">
         <div class="ch-col"><b>备份</b><label class="ch-all"><input type="checkbox" data-scope="global" data-side="backup"> 全选备份</label></div>
         <div class="ch-col"><b>本地</b><label class="ch-all"><input type="checkbox" data-scope="global" data-side="local"> 全选本地</label></div>
@@ -2144,7 +2159,7 @@ async function restoreDialog(name){
           <div class="cg-body" ${g.open?'':'hidden'}>${list.length ? list.map(rowHtml).join('') : '<div class="cg-empty">这一组没有对话</div>'}</div>
         </section>`;
       }).join('');
-      body.innerHTML = noteHtml + headHtml + groupsHtml;
+      body.innerHTML = dbNote + noAttNote + headHtml + groupsHtml;
       const btn = $('#doCustomRestore');
       if(btn) btn.disabled = plan.hasBackupDb === false;   // 无 db 名单为空，禁用确认避免空操作
       refreshChecks();
@@ -2789,7 +2804,12 @@ $('#btnAllSessions').onclick = async ()=>{
   // 用后端返回的真实数据重绘，比在本地拼一行更可靠（也拿到了副本的真实大小）。
   async function reloadList(){
     try{
-      const fresh = await api('/api/sessions/all' + (state.edition ? '?edition=' + encodeURIComponent(state.edition) : ''));
+      // refresh=1：让后端跳过 10 秒的会话缓存。刷新按钮连点两下时，
+      // 不带它第二次拿到的还是上一次的旧列表，看起来像「刷新没用」。
+      const qs = [];
+      if(state.edition) qs.push('edition=' + encodeURIComponent(state.edition));
+      qs.push('refresh=1');
+      const fresh = await api('/api/sessions/all?' + qs.join('&'));
       list = asArr(fresh.sessions);
       accounts = asArr(fresh.accounts);
       running = !!fresh.running;

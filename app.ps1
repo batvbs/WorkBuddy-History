@@ -3615,6 +3615,49 @@ function Invoke-UidRemap([string]$dbPath, [string]$oldUid, [string]$newUid) {
     }
 }
 
+function Set-UidForIds([string]$dbPath, $Ids, [string]$newUid) {
+    # Custom restore + "rewrite the owner to the current account": rewrite exactly
+    # the conversations the user ticked, whatever account they belonged to.
+    # Invoke-UidRemap (by old uid) is not enough here: a backup can hold rows from
+    # several accounts - the user may have switched accounts before backing up -
+    # and those rows would keep an owner the logged-in account cannot see, even
+    # though the user explicitly asked to take them over.
+    if (-not $newUid) { throw 'no_current_account' }
+    $list = @()
+    foreach ($k in $Ids.Keys) { $s = [string]$k; if ($s) { $list += $s } }
+    if (-not $list.Count) { return 0 }
+    $db = Open-WbDatabasePath $dbPath
+    try {
+        $total = 0
+        [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
+        try {
+            $chunk = 400
+            for ($i = 0; $i -lt $list.Count; $i += $chunk) {
+                $tail = @($list[$i..([Math]::Min($i + $chunk - 1, $list.Count - 1))])
+                $ph = @()
+                for ($k = 0; $k -lt $tail.Count; $k++) { $ph += ('?{0}' -f ($k + 2)) }
+                $inList = ($ph -join ', ')
+                # ?1 is the new owner, ?2.. are the ids. transport='local' keeps
+                # cloud mirrors alone: their owner lives on the server.
+                $total += [WbSqlite]::Exec($db,
+                    ("UPDATE sessions SET user_id=?1 WHERE transport='local' AND id IN ({0})" -f $inList),
+                    (@($newUid) + $tail))
+            }
+            [void][WbSqlite]::Exec($db, 'COMMIT', $null)
+        } catch {
+            [void][WbSqlite]::Exec($db, 'ROLLBACK', $null)
+            throw
+        }
+        [void][WbSqlite]::Query($db, 'PRAGMA wal_checkpoint(TRUNCATE)', $null)
+        $chk = [WbSqlite]::Query($db, 'PRAGMA integrity_check', $null)
+        if (-not $chk.Count -or [string]$chk[0]['integrity_check'] -ne 'ok') { throw 'integrity_check_failed' }
+        Write-Log ("uid rewrite by id -> {0} ({1} rows)" -f $newUid, $total)
+        return $total
+    } finally {
+        [WbSqlite]::Close($db)
+    }
+}
+
 function Get-RestoreGroup([bool]$exists, [long]$srcBytes, [long]$srcMs, [long]$dstBytes, [long]$dstMs) {
     # GROUPING SUGGESTION ONLY - this is NOT a decision about what to overwrite.
     # Custom restore never lets the backend pick conversations: the user submits
@@ -5850,14 +5893,31 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
 
             if ($remap) {
                 $cur = Get-CurrentAccount $product
-                $old = ''
-                if ($mf.account -and $mf.account.uid) { $old = [string]$mf.account.uid }
-                $chk = Test-RemapSafe $stageDb $old ($(if ($cur) { $cur.uid } else { '' }))
-                if ($chk.ok) {
-                    try { [void](Invoke-UidRemap $stageDb $old $cur.uid); $remapDone = $true }
-                    catch { $remapReason = 'remap_failed'; Write-Log ('remap failed: ' + $_.Exception.Message) }
+                $newUid = ''
+                if ($cur) { $newUid = [string]$cur.uid }
+                if ($mode -eq 'custom') {
+                    # Rewrite by the SELECTED ids, not by the manifest account: the
+                    # backup may hold conversations from more than one account, and
+                    # Invoke-UidRemap would only touch the manifest's rows - the
+                    # others would stay invisible to the logged-in account even
+                    # though the user asked to take them over.
+                    try {
+                        [void](Set-UidForIds $stageDb $validSelected $newUid)
+                        $remapDone = $true
+                    } catch {
+                        $remapReason = 'remap_failed'
+                        Write-Log ('remap by id failed: ' + $_.Exception.Message)
+                    }
                 } else {
-                    $remapReason = [string]$chk.reason
+                    $old = ''
+                    if ($mf.account -and $mf.account.uid) { $old = [string]$mf.account.uid }
+                    $chk = Test-RemapSafe $stageDb $old $newUid
+                    if ($chk.ok) {
+                        try { [void](Invoke-UidRemap $stageDb $old $newUid); $remapDone = $true }
+                        catch { $remapReason = 'remap_failed'; Write-Log ('remap failed: ' + $_.Exception.Message) }
+                    } else {
+                        $remapReason = [string]$chk.reason
+                    }
                 }
             }
 
@@ -6277,6 +6337,13 @@ function Invoke-Api([string]$path, $query, $req) {
             $edition = ''
             if ($query.ContainsKey('edition')) { $edition = $query['edition'] }
             if (-not (Test-Edition $edition)) { $edition = Get-ActiveEdition }
+            # refresh=1 comes from the explicit refresh button. Get-SessionsIndex
+            # serves a 10-second cache, so without this two quick clicks would show
+            # the same stale list and the button would look broken.
+            if ($query.ContainsKey('refresh') -and [string]$query['refresh'] -eq '1') {
+                $script:SessionCache = @{}
+                $script:SessionCacheAt = @{}
+            }
             # Get-SessionsIndex returns a real array; wrapping it with @() here
             # would nest it one level deeper and break every member access
             $all = Get-SessionsIndex $edition -IncludeDeleted
