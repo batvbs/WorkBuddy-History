@@ -2250,9 +2250,9 @@ $('#btnRecover').onclick = async ()=>{
   const defCount = list.filter(s=> s.defaultOn !== false).length;
   // 属于其他账号的对话在默认勾选里——一次「找回」就会把它们从原账号移走。
   // 这里把后果写明，避免用户以为只是「让它们重新出现」。
-  const otherAcc = list.filter(s=> !s.mine && s.state !== 'deleted');
+  const otherAcc = list.filter(s=> !s.mine);
   const otherNote = otherAcc.length
-    ? `<br><b style="color:var(--red)">其中 ${otherAcc.length} 个属于其他账号（${esc(otherAcc[0].shortUid || (otherAcc[0].uid||'').slice(0,8))}），找回会把它们从那个账号移走——原账号将不再显示这些对话。</b>`
+    ? `<br><b style="color:var(--red)">其中 ${otherAcc.length} 个属于其他账号（${esc(otherAcc[0].shortUid || (otherAcc[0].uid||'').slice(0,8))}，含已删除的），找回会把它们的归属改到当前账号——原账号将不再显示这些对话。</b>`
     : '';
 
   const groupsHtml = order.map(uid=>{

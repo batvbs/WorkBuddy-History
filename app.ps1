@@ -143,7 +143,7 @@ function Get-FolderSize([string]$path) {
     return [long]$sum
 }
 
-function Copy-Tree([string]$src, [string]$dst, [string]$skipName, [switch]$Strict) {
+function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$Strict) {
     # Copy the CONTENTS of $src into $dst, ONE FILE AT A TIME, rebuilding the
     # relative path by hand.
     #
@@ -153,15 +153,22 @@ function Copy-Tree([string]$src, [string]$dst, [string]$skipName, [switch]$Stric
     # MERGES instead of replacing and the subtree lands one level too deep -
     # dst\AAA\AAA\inner\f.txt. Session attachment folders are named after the
     # session id and are copied into a folder of the same name, so that merged
-    # copy used to nest a folder inside itself.
+    # copy used to nest a folder inside itself - every restore added one more
+    # level, and every backup carried it, which is why backups kept growing.
     #
-    # $skipName drops every entry whose first path segment equals it. Callers
-    # pass the session id: an attachment folder that contains a child folder of
-    # its own name is a self-nested copy left behind by the old restore code
-    # (verified: those children are byte-identical copies of their parent). It is
-    # carried along by every backup and every restore, which is why the backups
-    # were growing by hundreds of MB per run. Skipping it stops the spread; the
-    # parent copy still holds every file.
+    # $flattenSelf normalises such a self-nested folder while copying: leading
+    # path segments equal to it are stripped, so <id>/<id>/tool-results/a.txt
+    # lands at <id>/tool-results/a.txt. NOTHING IS DROPPED - the first version
+    # of this fix simply skipped the whole self-named subtree, which would have
+    # lost any file that exists only there (real case: 214 subagent transcripts
+    # were only inside the nested copy) and, worse, the pre-purge snapshot would
+    # have omitted files the purge then deleted for good. Duplicates (same
+    # relative path AND same length) are skipped; a same-named file with a
+    # different length is kept alongside as name-innerN.ext.
+    #
+    # Only restore passes $flattenSelf: it is the operation that is allowed to
+    # rewrite the home layout, and it is where the nesting came from. Backup and
+    # fork copy faithfully, because they must never lose a file.
     if (-not (Test-Path -LiteralPath $src)) { return }
     if (-not (Test-Path -LiteralPath $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
     $srcRoot = [IO.Path]::GetFullPath($src).TrimEnd('\')
@@ -171,13 +178,36 @@ function Copy-Tree([string]$src, [string]$dst, [string]$skipName, [switch]$Stric
     foreach ($f in @(Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Force -ErrorAction $errAction)) {
         $rel = $f.FullName.Substring($srcRoot.Length).TrimStart('\')
         if (-not $rel) { continue }
-        if ($skipName) {
-            $first = $rel
-            $cut = $rel.IndexOf('\')
-            if ($cut -ge 0) { $first = $rel.Substring(0, $cut) }
-            if ($first -eq $skipName) { continue }
+        $stripped = $false
+        if ($flattenSelf) {
+            $prefix = $flattenSelf + '\'
+            while ($rel.Length -gt $prefix.Length -and
+                   $rel.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                $rel = $rel.Substring($prefix.Length)
+                $stripped = $true
+            }
         }
         $target = Join-Path $dstRoot $rel
+        if ($stripped -and (Test-Path -LiteralPath $target)) {
+            $existing = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+            if ($existing -and -not $existing.PSIsContainer) {
+                if ($existing.Length -eq $f.Length) { continue }
+                # Same name, different content: keep both instead of overwriting.
+                # The directory has to be carried over explicitly - building the
+                # candidate from the bare file name drops it and the file lands in
+                # whatever the process working directory happens to be.
+                $tDir = Split-Path -Parent $target
+                $tName = [IO.Path]::GetFileNameWithoutExtension($target)
+                $tExt = [IO.Path]::GetExtension($target)
+                $n = 1
+                $cand = Join-Path $tDir ($tName + '-inner' + $n + $tExt)
+                while (Test-Path -LiteralPath $cand) {
+                    $n++
+                    $cand = Join-Path $tDir ($tName + '-inner' + $n + $tExt)
+                }
+                $target = $cand
+            }
+        }
         $parent = Split-Path -Parent $target
         if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
         Copy-Item -LiteralPath $f.FullName -Destination $target -Force -ErrorAction $errAction
@@ -4561,7 +4591,7 @@ function Fork-Session([string]$product, [string]$id) {
                     # source id is passed as the skip name: a self-nested copy
                     # inside the source is an artifact of the old restore code
                     # and must not be duplicated into the fork.
-                    Copy-Tree $att $dstAtt $id -Strict
+                    Copy-Tree $att $dstAtt '' -Strict
                 }
             }
             [void][WbSqlite]::Exec($db, 'COMMIT', $null)
@@ -5550,9 +5580,11 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
         if ($includeAttachments -and $s.hasAttachments) {
             $attSrc = Join-Path $srcDir $s.id
             $attDst = Join-Path $dstDir $s.id
-            Copy-Tree $attSrc $attDst $s.id
-            # Count and size come from the copy, not the source: the source may
-            # still carry a self-nested duplicate that was deliberately skipped.
+            # Faithful copy: a backup must never drop a file, so the nested
+            # folders left by the old restore code are carried as they are. The
+            # count and the size are taken from the copy so they describe what
+            # the backup actually contains.
+            Copy-Tree $attSrc $attDst
             $inner = @(Get-ChildItem -LiteralPath $attDst -Recurse -File -Force -ErrorAction SilentlyContinue)
             $fileCount += $inner.Count
             $totalBytes += (Get-FolderSize $attDst)
