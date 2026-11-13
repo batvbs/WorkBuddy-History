@@ -230,6 +230,10 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
 
     # canonical files first, whatever order the tree was walked
     $ordered = @($plan | Where-Object { -not $_.Stripped }) + @($plan | Where-Object { $_.Stripped })
+    # canonical targets already replaced in this run: only those are safe to
+    # deduplicate against. A reserved name that has NOT been written yet may be
+    # overwritten by its canonical copy later, so matching it proves nothing.
+    $written = @{}
 
     foreach ($it in $ordered) {
         $f = $it.File
@@ -252,7 +256,7 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
         if (-not $it.Stripped -and -not $relocated) {
             # own path: restore replaces what is there
             if (-not (Test-Path -LiteralPath $target -PathType Container)) {
-                [void](Copy-Or-Defer $f.FullName $target $hard)
+                if (Copy-Or-Defer $f.FullName $target $hard) { $written[$target.ToLowerInvariant()] = $true }
                 continue
             }
             # a directory owns the name. Never delete it - relocate instead, and
@@ -275,7 +279,11 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
                 $chosen = $cand
                 break
             }
-            # occupied: identical content is a duplicate, anything else moves on
+            # occupied: identical content is a duplicate, anything else moves on -
+            # unless the occupant is a canonical target that has not been written
+            # yet, because that file is about to be replaced
+            $ck = $cand.ToLowerInvariant()
+            if ($reserved.ContainsKey($ck) -and -not $written.ContainsKey($ck)) { continue }
             $existing = Get-Item -LiteralPath $cand -Force -ErrorAction SilentlyContinue
             if ($existing -and -not $existing.PSIsContainer -and $existing.Length -eq $f.Length) {
                 $hSrc = Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue
