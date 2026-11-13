@@ -2160,6 +2160,20 @@ async function restoreDialog(name){
         </section>`;
       }).join('');
       body.innerHTML = dbNote + noAttNote + headHtml + groupsHtml;
+      // 清单里的「改写归属」不能用第一弹窗那套判断：那是按 manifest 账号判的
+      // （同一账号就禁用），但自定义恢复是按**用户选中的 id** 改写，备份里
+      // 可能混着别的账号的对话——那种情况恰恰需要改写，不能被禁用掉。
+      // 这里只要求：当前有登录账号 + 备份里有可读的对话库。
+      const rm2 = $('#cbRemap2');
+      if(rm2){
+        const okCustom = !!(curAcct && curAcct.uid) && plan.hasBackupDb !== false;
+        rm2.disabled = !okCustom;
+        if(!okCustom) rm2.checked = false;
+        const sub = rm2.parentElement.querySelector('.cust-remap-sub');
+        if(sub) sub.textContent = okCustom
+          ? '把数据库里这些对话的归属改成当前账号（只改归属，不动内容）'
+          : '当前不可用：需要先登录一个账号，且备份里要有可读的对话数据库';
+      }
       const btn = $('#doCustomRestore');
       if(btn) btn.disabled = plan.hasBackupDb === false;   // 无 db 名单为空，禁用确认避免空操作
       refreshChecks();
