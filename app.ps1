@@ -143,21 +143,44 @@ function Get-FolderSize([string]$path) {
     return [long]$sum
 }
 
-function Copy-Tree([string]$src, [string]$dst) {
-    # Copy the CONTENTS of $src into $dst.
+function Copy-Tree([string]$src, [string]$dst, [string]$skipName, [switch]$Strict) {
+    # Copy the CONTENTS of $src into $dst, ONE FILE AT A TIME, rebuilding the
+    # relative path by hand.
     #
-    # NOT `Copy-Item -LiteralPath $src -Destination $dst -Recurse`: when $dst
-    # already exists (which it always does here, because the caller joins the
-    # same leaf name), Copy-Item puts the source directory INSIDE the
-    # destination, so the result lands one level too deep -
-    # dst\AAA\AAA\inner\f.txt instead of dst\AAA\inner\f.txt. Verified by
-    # experiment. Since the callers use this for attachment folders, the
-    # attachments ended up somewhere the client never looks, and
-    # -ErrorAction SilentlyContinue kept it quiet.
+    # NOT `Copy-Item -LiteralPath $src -Destination $dst -Recurse`, and not even
+    # per-child `Copy-Item -Destination $dst -Recurse`: whenever the destination
+    # already holds an entry with the same name as the source child, Copy-Item
+    # MERGES instead of replacing and the subtree lands one level too deep -
+    # dst\AAA\AAA\inner\f.txt. Session attachment folders are named after the
+    # session id and are copied into a folder of the same name, so that merged
+    # copy used to nest a folder inside itself.
+    #
+    # $skipName drops every entry whose first path segment equals it. Callers
+    # pass the session id: an attachment folder that contains a child folder of
+    # its own name is a self-nested copy left behind by the old restore code
+    # (verified: those children are byte-identical copies of their parent). It is
+    # carried along by every backup and every restore, which is why the backups
+    # were growing by hundreds of MB per run. Skipping it stops the spread; the
+    # parent copy still holds every file.
     if (-not (Test-Path -LiteralPath $src)) { return }
     if (-not (Test-Path -LiteralPath $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
-    foreach ($c in @(Get-ChildItem -LiteralPath $src -Force -ErrorAction SilentlyContinue)) {
-        Copy-Item -LiteralPath $c.FullName -Destination $dst -Recurse -Force -ErrorAction SilentlyContinue
+    $srcRoot = [IO.Path]::GetFullPath($src).TrimEnd('\')
+    $dstRoot = [IO.Path]::GetFullPath($dst).TrimEnd('\')
+    $errAction = 'SilentlyContinue'
+    if ($Strict) { $errAction = 'Stop' }
+    foreach ($f in @(Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Force -ErrorAction $errAction)) {
+        $rel = $f.FullName.Substring($srcRoot.Length).TrimStart('\')
+        if (-not $rel) { continue }
+        if ($skipName) {
+            $first = $rel
+            $cut = $rel.IndexOf('\')
+            if ($cut -ge 0) { $first = $rel.Substring(0, $cut) }
+            if ($first -eq $skipName) { continue }
+        }
+        $target = Join-Path $dstRoot $rel
+        $parent = Split-Path -Parent $target
+        if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        Copy-Item -LiteralPath $f.FullName -Destination $target -Force -ErrorAction $errAction
     }
 }
 
@@ -4533,9 +4556,12 @@ function Fork-Session([string]$product, [string]$id) {
                     # half-filled directory (not just fully copied files).
                     New-Item -ItemType Directory -Path $dstAtt -Force | Out-Null
                     $copied.Add($dstAtt)
-                    foreach ($c in @(Get-ChildItem -LiteralPath $att -Force -ErrorAction Stop)) {
-                        Copy-Item -LiteralPath $c.FullName -Destination $dstAtt -Recurse -Force -ErrorAction Stop
-                    }
+                    # Strict copy: a fork must not report success with a partial
+                    # attachment directory, so errors reach the rollback. The
+                    # source id is passed as the skip name: a self-nested copy
+                    # inside the source is an artifact of the old restore code
+                    # and must not be duplicated into the fork.
+                    Copy-Tree $att $dstAtt $id -Strict
                 }
             }
             [void][WbSqlite]::Exec($db, 'COMMIT', $null)
@@ -5524,10 +5550,12 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
         if ($includeAttachments -and $s.hasAttachments) {
             $attSrc = Join-Path $srcDir $s.id
             $attDst = Join-Path $dstDir $s.id
-            Copy-Tree $attSrc $attDst
-            $inner = Get-ChildItem -LiteralPath $attSrc -Recurse -File -Force -ErrorAction SilentlyContinue
-            $fileCount += [int]($inner | Measure-Object).Count
-            $totalBytes += (Get-FolderSize $attSrc)
+            Copy-Tree $attSrc $attDst $s.id
+            # Count and size come from the copy, not the source: the source may
+            # still carry a self-nested duplicate that was deliberately skipped.
+            $inner = @(Get-ChildItem -LiteralPath $attDst -Recurse -File -Force -ErrorAction SilentlyContinue)
+            $fileCount += $inner.Count
+            $totalBytes += (Get-FolderSize $attDst)
         }
         $sessionEntries.Add([pscustomobject]@{
             id        = $s.id
@@ -6068,7 +6096,7 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                     # transcript loop above.
                     if (-not $validSelected.ContainsKey($sd.Name)) { continue }
                 }
-                Copy-Tree $sd.FullName $target
+                Copy-Tree $sd.FullName $target $sd.Name
             }
         }
     }

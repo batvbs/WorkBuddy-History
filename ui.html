@@ -2248,6 +2248,12 @@ $('#btnRecover').onclick = async ()=>{
   const stateTag = s => s.state === 'archived' ? '<span class="badge n">已归档</span>'
                      : (s.state === 'deleted' ? '<span class="badge r">已删除</span>' : '');
   const defCount = list.filter(s=> s.defaultOn !== false).length;
+  // 属于其他账号的对话在默认勾选里——一次「找回」就会把它们从原账号移走。
+  // 这里把后果写明，避免用户以为只是「让它们重新出现」。
+  const otherAcc = list.filter(s=> !s.mine && s.state !== 'deleted');
+  const otherNote = otherAcc.length
+    ? `<br><b style="color:var(--red)">其中 ${otherAcc.length} 个属于其他账号（${esc(otherAcc[0].shortUid || (otherAcc[0].uid||'').slice(0,8))}），找回会把它们从那个账号移走——原账号将不再显示这些对话。</b>`
+    : '';
 
   const groupsHtml = order.map(uid=>{
     const arr = groups[uid];
@@ -2288,6 +2294,7 @@ $('#btnRecover').onclick = async ()=>{
       <div class="note" style="margin-bottom:12px">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
         <div>勾选的对话会被<b>改写为当前账号</b>（${esc(accLabel)}），之后就能在侧栏看到。
+        ${otherNote}
         已归档的找回后<b>仍然是归档状态</b>；已删除的找回后会<b>取消删除状态</b>，重新出现在列表里。
         处理前会自动关闭客户端；完成后由你决定要不要打开客户端。</div>
       </div>
