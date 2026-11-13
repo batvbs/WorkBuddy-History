@@ -1,5 +1,5 @@
 <#
-  WorkBuddy Keeper 1.9.6
+  WorkBuddy Keeper 1.9.7
   Session backup / restore + account switch for the WorkBuddy desktop client.
   Supports both editions (China and international) side by side.
 
@@ -37,7 +37,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$AppVersion = '1.9.6'
+$AppVersion = '1.9.7'
 
 # --------------------------------------------------------------------------
 # paths
