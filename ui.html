@@ -2662,6 +2662,10 @@ $('#btnAllSessions').onclick = async ()=>{
       <button class="btn danger-solid" id="btnPurgeAll">彻底删除</button>
     </div>`, { xwide:true, onClose: ()=>{ if(changed) load().catch(()=>{}); } });
 
+  // 本窗口的身份锚点：刷新/操作是异步的，用户在 await 期间关掉本窗再开一个新
+  // 窗口时，旧请求的回调不能拿过期的数据去改新窗口（会写出上一份的口径）。
+  const dlgAnchor = $('#allTitle');
+
   renderFilters();
   paint();
 
@@ -2824,6 +2828,7 @@ $('#btnAllSessions').onclick = async ()=>{
   // 操作完成后整份重拉：分叉 / 开关客户端都会改变列表内容或锁定状态，
   // 用后端返回的真实数据重绘，比在本地拼一行更可靠（也拿到了副本的真实大小）。
   async function reloadList(){
+    // 返回 true=数据已刷新；false=没刷成（调用方据此决定要不要下结论）
     try{
       // refresh=1：让后端跳过 10 秒的会话缓存。刷新按钮连点两下时，
       // 不带它第二次拿到的还是上一次的旧列表，看起来像「刷新没用」。
@@ -2831,6 +2836,8 @@ $('#btnAllSessions').onclick = async ()=>{
       if(state.edition) qs.push('edition=' + encodeURIComponent(state.edition));
       qs.push('refresh=1');
       const fresh = await api('/api/sessions/all?' + qs.join('&'));
+      // 请求期间本窗口被关掉（可能又开了新的一个）：这份结果不属于新窗口
+      if(!dlgAnchor || !dlgAnchor.isConnected) return false;
       list = asArr(fresh.sessions);
       accounts = asArr(fresh.accounts);
       running = !!fresh.running;
@@ -2844,9 +2851,11 @@ $('#btnAllSessions').onclick = async ()=>{
         ttl.textContent = '本地对话（' + list.length + '/' + tot + '）';
       }
       repaint();
+      return true;
     }catch(e){
       console.error('[reloadList]', e);
       toast('列表刷新失败：' + errText(e.message), 'err');
+      return false;
     }
   }
   $('#btnClientToggle').onclick = async ()=>{
@@ -2874,8 +2883,9 @@ $('#btnAllSessions').onclick = async ()=>{
           changed = true; close();
           // 用后端重拉后的 running 为准：Stop-Client 会吞掉结束进程的失败，
           // 只看接口成功就报「已关闭」会在客户端仍活着时给出错误结论。
-          await reloadList();
-          if(running) toast('关闭失败：客户端仍在运行，请手动退出后再试', 'err');
+          const verified = await reloadList();
+          if(!verified) toast('已发送关闭指令，但没能读到客户端状态，请点刷新确认');
+          else if(running) toast('关闭失败：客户端仍在运行，请手动退出后再试', 'err');
           else toast('已关闭客户端', 'ok');
         }catch(e){ toast('关闭失败：' + errText(e.message), 'err'); }
         finally{ busy(false); }
