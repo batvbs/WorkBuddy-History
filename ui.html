@@ -1887,8 +1887,9 @@ async function restoreDialog(name){
         <label class="check" style="margin-top:8px">
           <input type="checkbox" id="cbRemap" ${chk.allowed?'checked':''} ${chk.allowed?'':'disabled'}>
           <span>把对话归属改写为当前账号
-            <span style="display:block;font-size:11.5px;margin-top:2px;color:${chk.allowed?'var(--muted)':'var(--amber)'}">
-              ${chk.allowed ? '把数据库里这些对话的归属改成当前账号（只改归属，不动内容；备份里没合并的事务日志会先自动合并）' : (REASON[chk.reason] || '当前不可用')}
+            <span style="display:block;font-size:11.5px;margin-top:2px;color:${chk.allowed?'var(--muted)':'var(--amber)'}"
+                  ${chk.allowed ? 'title="备份里没合并的事务日志会先自动合并"' : ''}>
+              ${chk.allowed ? '只改归属，不动内容' : (REASON[chk.reason] || '当前不可用')}
             </span>
           </span>
         </label>` : ''}
@@ -1978,7 +1979,7 @@ async function restoreDialog(name){
     const remapHtml = `<label class="check cust-remap">
         <input type="checkbox" id="cbRemap2" ${chk.allowed && initRemap ? 'checked' : ''} ${chk.allowed?'':'disabled'}>
         <span>把对话归属改写为当前账号
-          <span class="cust-remap-sub">${chk.allowed ? '把数据库里这些对话的归属改成当前账号（只改归属，不动内容）' : (REASON[chk.reason] || '当前不可用')}</span>
+          <span class="cust-remap-sub">${chk.allowed ? '只改归属，不动内容' : (REASON[chk.reason] || '当前不可用')}</span>
         </span></label>`;
     modal(`
       <div class="modal-h">
@@ -2105,9 +2106,9 @@ async function restoreDialog(name){
         refreshChecks();
       }
     });
-    // 展开/折叠：整行（标题 + 中间空白）都可点，只有右侧「全选」区例外。
-    // 按钮本身铺满整行，这里再兜一层——万一点到行内边距或换行后的空隙，
-    // 只要不在全选区里，就当作点了标题。
+    // 展开/折叠：可点区域就是那个铺满整行的按钮本身。
+    // 按钮与右侧「全选」区之间那条 10px 细缝属于容器，**不响应**（按用户要求），
+    // 所以不再做「点容器也当点标题」的兜底。
     function toggleGroup(tg){
       const box = tg.closest('.cgroup').querySelector('.cg-body');
       const open = box.hasAttribute('hidden');
@@ -2117,12 +2118,7 @@ async function restoreDialog(name){
     }
     body.addEventListener('click', e=>{
       const tg = e.target.closest('.cg-toggle');
-      if(tg){ toggleGroup(tg); return; }
-      const head = e.target.closest('.cg-head');
-      if(head && !e.target.closest('.cg-alls')){
-        const b = head.querySelector('.cg-toggle');
-        if(b) toggleGroup(b);
-      }
+      if(tg) toggleGroup(tg);
     });
 
     // 取清单（只读）；失败显示错误、可重试、可关闭。
@@ -2186,7 +2182,7 @@ async function restoreDialog(name){
         if(!okCustom) rm2.checked = false;
         const sub = rm2.parentElement.querySelector('.cust-remap-sub');
         if(sub) sub.textContent = okCustom
-          ? '把数据库里这些对话的归属改成当前账号（只改归属，不动内容）'
+          ? '只改归属，不动内容'
           : '当前不可用：需要先登录一个账号，且备份里要有可读的对话数据库';
       }
       const btn = $('#doCustomRestore');
