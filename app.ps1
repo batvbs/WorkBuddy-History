@@ -193,13 +193,35 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
 
     function Copy-Or-Defer([string]$from, [string]$to, [bool]$hard) {
         # Write next to the target and rename when the copy is complete. A copy
-        # that dies halfway (full disk, crash) then leaves a .wbtmp file behind
+        # that dies halfway (full disk, crash) then leaves a temp file behind
         # instead of a truncated file under the real name - which matters because
         # a merge retry skips names that already exist and would otherwise keep
         # the truncated file forever while reporting no error at all.
-        $tmp = $to + '.wbtmp'
+        #
+        # The temp name is random and created exclusively (CreateNew): a fixed
+        # suffix would mean deleting whatever already sits at <target>.wbtmp,
+        # which may be a perfectly good local file the user owns - the copy would
+        # then quietly destroy it. We only ever delete the file this call created.
+        $tmp = $null
+        for ($ti = 0; $ti -lt 20; $ti++) {
+            $cand = $to + '.' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.wbtmp'
+            try {
+                $fs = [IO.File]::Open($cand, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+                $fs.Close()
+                $fs.Dispose()
+                $tmp = $cand
+                break
+            } catch {
+                $fs = $null   # name taken (or the folder is not writable: reported below)
+            }
+        }
+        if (-not $tmp) {
+            if ($hard) { throw ('copy_temp_unavailable: ' + $to) }
+            Write-Log ('copy temp unavailable: ' + $to)
+            if ($null -ne $Collect) { try { [void]$Collect.Add($to) } catch { } }
+            return $false
+        }
         try {
-            if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
             Copy-Item -LiteralPath $from -Destination $tmp -Force -ErrorAction Stop
             Move-Item -LiteralPath $tmp -Destination $to -Force -ErrorAction Stop
             return $true
