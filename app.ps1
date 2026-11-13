@@ -162,9 +162,18 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
     # of this fix simply skipped the whole self-named subtree, which would have
     # lost any file that exists only there (real case: 214 subagent transcripts
     # were only inside the nested copy) and, worse, the pre-purge snapshot would
-    # have omitted files the purge then deleted for good. Duplicates (same
-    # relative path AND same length) are skipped; a same-named file with a
-    # different length is kept alongside as name-innerN.ext.
+    # have omitted files the purge then deleted for good.
+    #
+    # Flattening can map two source files onto one destination, so the write has
+    # to be collision-safe on THREE axes, none of which may depend on the order
+    # the tree happens to be walked in:
+    #   - name only: canonical (unflattened) files are written first, so the real
+    #     location always wins; a flattened duplicate never takes its slot
+    #   - content: an existing file is treated as a duplicate only when the
+    #     SHA256 matches - equal length alone is not identity (AB vs CD)
+    #   - directories: if the target path is occupied by a directory, or a file
+    #     sits where a parent directory is needed, a free name is allocated
+    # Anything that is not an exact duplicate is kept as name-innerN.ext.
     #
     # Only restore passes $flattenSelf: it is the operation that is allowed to
     # rewrite the home layout, and it is where the nesting came from. Backup and
@@ -175,41 +184,82 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
     $dstRoot = [IO.Path]::GetFullPath($dst).TrimEnd('\')
     $errAction = 'SilentlyContinue'
     if ($Strict) { $errAction = 'Stop' }
+
+    $plan = New-Object System.Collections.Generic.List[object]
     foreach ($f in @(Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Force -ErrorAction $errAction)) {
         $rel = $f.FullName.Substring($srcRoot.Length).TrimStart('\')
         if (-not $rel) { continue }
-        $stripped = $false
+        $flat = $rel
         if ($flattenSelf) {
             $prefix = $flattenSelf + '\'
-            while ($rel.Length -gt $prefix.Length -and
-                   $rel.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-                $rel = $rel.Substring($prefix.Length)
-                $stripped = $true
+            while ($flat.Length -gt $prefix.Length -and
+                   $flat.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+                $flat = $flat.Substring($prefix.Length)
             }
         }
-        $target = Join-Path $dstRoot $rel
-        if ($stripped -and (Test-Path -LiteralPath $target)) {
-            $existing = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
-            if ($existing -and -not $existing.PSIsContainer) {
-                if ($existing.Length -eq $f.Length) { continue }
-                # Same name, different content: keep both instead of overwriting.
-                # The directory has to be carried over explicitly - building the
-                # candidate from the bare file name drops it and the file lands in
-                # whatever the process working directory happens to be.
-                $tDir = Split-Path -Parent $target
-                $tName = [IO.Path]::GetFileNameWithoutExtension($target)
-                $tExt = [IO.Path]::GetExtension($target)
-                $n = 1
-                $cand = Join-Path $tDir ($tName + '-inner' + $n + $tExt)
-                while (Test-Path -LiteralPath $cand) {
-                    $n++
-                    $cand = Join-Path $tDir ($tName + '-inner' + $n + $tExt)
+        $plan.Add([pscustomobject]@{ File = $f; Flat = $flat; Stripped = ($flat -ne $rel) })
+    }
+
+    # canonical files claim their names first
+    $ordered = @($plan | Where-Object { -not $_.Stripped }) + @($plan | Where-Object { $_.Stripped })
+
+    foreach ($it in $ordered) {
+        $f = $it.File
+        $rel = $it.Flat
+        $target = $null
+
+        # two layout attempts: the wanted path, then a flat name in the root if a
+        # file is sitting where this path needs a directory
+        for ($attempt = 1; $attempt -le 2; $attempt++) {
+            $cand = Join-Path $dstRoot $rel
+            $parent = Split-Path -Parent $cand
+            $usable = $true
+            if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+                $probe = $parent
+                while ($probe -and -not (Test-Path -LiteralPath $probe)) { $probe = Split-Path -Parent $probe }
+                if ($probe -and (Test-Path -LiteralPath $probe -PathType Leaf)) { $usable = $false }
+                else {
+                    try { New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null }
+                    catch { $usable = $false }
                 }
-                $target = $cand
+            } elseif ($parent -and (Test-Path -LiteralPath $parent -PathType Leaf)) {
+                $usable = $false
+            }
+            if ($usable) { $target = $cand; break }
+            $rel = ($it.Flat -replace '\\', '-')
+        }
+        if (-not $target) { continue }
+
+        # Collisions on the file itself, tried in order: the wanted name, then
+        # name-inner1, name-inner2 ... The first free name wins; an occupied one
+        # is skipped ONLY when its SHA256 matches (equal length is not identity:
+        # AB vs CD). A directory sitting on the name is never touched - the file
+        # simply takes the next free name. Checking each candidate instead of
+        # jumping to the first free one keeps a second run from writing the same
+        # content again under a new name.
+        $skip = $false
+        $placed = $false
+        $tDir = Split-Path -Parent $target
+        $tName = [IO.Path]::GetFileNameWithoutExtension($target)
+        $tExt = [IO.Path]::GetExtension($target)
+        for ($n = 0; $n -lt 500; $n++) {
+            $cand = $target
+            if ($n -gt 0) { $cand = Join-Path $tDir ($tName + '-inner' + $n + $tExt) }
+            if (-not (Test-Path -LiteralPath $cand)) { $target = $cand; $placed = $true; break }
+            $existing = Get-Item -LiteralPath $cand -Force -ErrorAction SilentlyContinue
+            if ($existing -and -not $existing.PSIsContainer -and $existing.Length -eq $f.Length) {
+                $hSrc = Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue
+                $hDst = Get-FileHash -LiteralPath $cand -Algorithm SHA256 -ErrorAction SilentlyContinue
+                if ($hSrc -and $hDst -and $hSrc.Hash -eq $hDst.Hash) { $skip = $true; break }
             }
         }
+        if ($skip -or -not $placed) { continue }
+
         $parent = Split-Path -Parent $target
-        if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+            try { New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null }
+            catch { if ($Strict) { throw } else { continue } }
+        }
         Copy-Item -LiteralPath $f.FullName -Destination $target -Force -ErrorAction $errAction
     }
 }
