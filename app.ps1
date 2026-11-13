@@ -203,8 +203,12 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
         # which may be a perfectly good local file the user owns - the copy would
         # then quietly destroy it. We only ever delete the file this call created.
         $tmp = $null
+        # Short sibling name in the SAME directory: appending a suffix to the target
+        # name would push a 241-character file past the 255-character component limit
+        # and make the copy fail. ".wbXXXXXXXX.tmp" is 15 characters regardless.
+        $dirPart = Split-Path -Parent $to
         for ($ti = 0; $ti -lt 20; $ti++) {
-            $cand = $to + '.' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.wbtmp'
+            $cand = Join-Path $dirPart ('.wb' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.tmp')
             try {
                 $fs = [IO.File]::Open($cand, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
                 $fs.Close()
