@@ -2801,7 +2801,7 @@ $('#btnAllSessions').onclick = async ()=>{
         close();
         // 整份重拉而不是本地 push 一行：副本的真实大小 / 时间以库里的为准，
         // 顺序也回到后端那份（按更新时间排，副本紧挨着原对话）。
-        await reloadList();
+        const refreshed = await reloadList();
         // 自动滚到副本并闪一下：列表可能有几十条，副本不在视野里就等于「没反应」。
         const row = document.querySelector('.sess-row[data-row="' + CSS.escape(res.id) + '"]');
         if(row){
@@ -2809,7 +2809,9 @@ $('#btnAllSessions').onclick = async ()=>{
           row.classList.add('flash');
           setTimeout(()=> row.classList.remove('flash'), 1800);
         }
-        toast('已创建分叉副本', 'ok');
+        // 副本已经建好了，但列表没刷出来：别说成完全成功，也别让副本「看不见」
+        toast(refreshed ? '已创建分叉副本' : '已创建分叉副本，但列表没刷新，请点右上角刷新查看',
+              refreshed ? 'ok' : 'err');
       }catch(err){
         forking = false;
         btn.disabled = false;
@@ -2931,8 +2933,9 @@ $('#btnAllSessions').onclick = async ()=>{
       const res = await api('/api/client/start', { product: r.edition || state.edition });
       if(!res.started){ toast('没能启动：' + errText(res.reason || 'start_timeout'), 'err'); return; }
       changed = true;
-      await reloadList();
-      toast('已打开客户端', 'ok');
+      const verified = await reloadList();
+      toast(verified ? '已打开客户端' : '已发送启动指令，但没能读到状态，请点刷新确认',
+            verified ? 'ok' : 'err');
     }catch(e){ toast('操作失败：' + errText(e.message), 'err'); }
     finally{ busy(false); }
   };
