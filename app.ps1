@@ -143,7 +143,7 @@ function Get-FolderSize([string]$path) {
     return [long]$sum
 }
 
-function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$Strict) {
+function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$Strict, $Collect) {
     # Copy the CONTENTS of $src into $dst, ONE FILE AT A TIME, rebuilding the
     # relative path by hand.
     #
@@ -193,7 +193,16 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
 
     function Copy-Or-Defer([string]$from, [string]$to, [bool]$hard) {
         try { Copy-Item -LiteralPath $from -Destination $to -Force -ErrorAction Stop; return $true }
-        catch { if ($hard) { throw } else { Write-Log ('copy failed: ' + $from + ' -> ' + $to); return $false } }
+        catch {
+            if ($hard) { throw }
+            Write-Log ('copy failed: ' + $from + ' -> ' + $to)
+            # Non-strict callers used to lose this silently: the log line is only
+            # read by whoever opens activity.log. Backup passes a list so it can
+            # tell the user that the snapshot is incomplete instead of reporting
+            # a clean success.
+            if ($null -ne $Collect) { try { [void]$Collect.Add($to) } catch { } }
+            return $false
+        }
     }
 
     if (-not (Test-Path -LiteralPath $src)) { return }
@@ -4883,6 +4892,11 @@ function Invoke-PurgeSessions([string]$product, [string[]]$ids, [bool]$Backup = 
     $failure = ''
     $db = $null
     $removedRows = 0
+    # Only rows the DELETE actually removed may lose their files. The DELETE
+    # carries guards (transport='local', deleted_at set, not the '-1' sentinel),
+    # so a ticked row can survive - and deleting its transcript then would leave
+    # a live conversation with no content.
+    $purgedIds = @{}
     try {
         $db = Open-WbDatabasePath $dbPath
         [void][WbSqlite]::Exec($db, 'BEGIN IMMEDIATE', $null)
@@ -4893,6 +4907,7 @@ function Invoke-PurgeSessions([string]$product, [string[]]$ids, [bool]$Backup = 
                     "DELETE FROM sessions WHERE id=?1 AND transport='local' AND deleted_at IS NOT NULL AND CAST(deleted_at AS TEXT) <> '-1'",
                     @([string]$s.id))
                 $removedRows += $n
+                if ($n -gt 0) { $purgedIds[[string]$s.id] = $true }
             }
             [void][WbSqlite]::Exec($db, 'COMMIT', $null)
         } catch {
@@ -4916,11 +4931,15 @@ function Invoke-PurgeSessions([string]$product, [string[]]$ids, [bool]$Backup = 
     $projects = Join-Path $edHome 'projects'
     $freed = [long]0
     $removedFiles = 0
+    # Walk only the conversations whose row is gone. A ticked row that the DELETE
+    # refused to remove (state changed underneath, '-1' sentinel, cloud transport)
+    # keeps its transcript - files follow the row, never the tick.
+    $doomed = @($targets | Where-Object { $purgedIds.ContainsKey([string]$_.id) })
     $idset = @{}
-    foreach ($s in $targets) { $idset[[string]$s.id] = $true }
+    foreach ($s in $doomed) { $idset[[string]$s.id] = $true }
     if (Test-Path -LiteralPath $projects) {
         $dirs = @(Get-ChildItem -LiteralPath $projects -Directory -ErrorAction SilentlyContinue)
-        foreach ($s in $targets) {
+        foreach ($s in $doomed) {
             $sid = [string]$s.id
             $slugs = @()
             if ($s.slug) { $slugs += [string]$s.slug }
@@ -5596,6 +5615,10 @@ function Get-BackupMeta([string]$name) {
         tag                = [string]$mf.tag
         hasDatabase        = [bool]$mf.hasDatabase
         note               = [string]$mf.note
+        # 0 for every backup written before this field existed - those were
+        # produced by a build that lost copy errors silently, but they are not
+        # known to be incomplete either, so keep them unmarked.
+        attachmentErrors   = [int]$mf.attachmentErrors
     }
 }
 
@@ -5614,6 +5637,13 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
     if (-not (Test-Edition $product)) { $product = Get-ActiveEdition }
     $edHome = Get-EditionHome $product
     if (-not (Test-Path -LiteralPath $edHome)) { throw 'workbuddy_home_missing' }
+    # The session index is cached for 10 seconds. A backup that read the cache
+    # would miss every conversation created since it was filled: the database is
+    # copied as a file (so the row travels anyway) but its transcript would not
+    # be copied, and the backup would show that conversation as "record only".
+    # A backup is exactly the moment to pay for a fresh read.
+    $script:SessionCache.Remove($product)
+    $script:SessionCacheAt.Remove($product)
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $prefix = ''
     if ($tag) { $prefix = $tag + '-' }
@@ -5625,6 +5655,11 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
 
     $fileCount = 0
     $totalBytes = 0
+    # Copy failures must not abort a backup (one locked file should not cost the
+    # user the other 300), but they must not vanish either: the manifest records
+    # how many files are missing and the API result carries the same number, so
+    # the UI can say "this snapshot is incomplete" instead of "done".
+    $copyErrors = New-Object System.Collections.Generic.List[string]
 
     # 1. database
     $dbNames = @('workbuddy.db', 'workbuddy.db-wal', 'workbuddy.db-shm')
@@ -5657,16 +5692,22 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
         if ($s.slug -and -not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
 
         $jsonl = Join-Path $srcDir ($s.id + '.jsonl')
-        if (Test-Path -LiteralPath $jsonl) {
-            Copy-Item -LiteralPath $jsonl -Destination (Join-Path $dstDir ($s.id + '.jsonl')) -Force
-            $fileCount++
-            $totalBytes += (Get-Item -LiteralPath $jsonl).Length
-        }
-        $rb = Join-Path $srcDir ($s.id + '.file-rollback.ndjson')
-        if (Test-Path -LiteralPath $rb) {
-            Copy-Item -LiteralPath $rb -Destination (Join-Path $dstDir ($s.id + '.file-rollback.ndjson')) -Force
-            $fileCount++
-            $totalBytes += (Get-Item -LiteralPath $rb).Length
+        # Strict per file, and a failure is recorded instead of counted as copied:
+        # Copy-Item is non-terminating, so the old code incremented $fileCount even
+        # when the copy had failed.
+        foreach ($one in @(($s.id + '.jsonl'), ($s.id + '.file-rollback.ndjson'))) {
+            $srcFile = Join-Path $srcDir $one
+            if (-not (Test-Path -LiteralPath $srcFile)) { continue }
+            $dstFile = Join-Path $dstDir $one
+            try {
+                $len = [long](Get-Item -LiteralPath $srcFile).Length
+                Copy-Item -LiteralPath $srcFile -Destination $dstFile -Force -ErrorAction Stop
+                $fileCount++
+                $totalBytes += $len
+            } catch {
+                Write-Log ('backup file failed: ' + $srcFile + ' ' + $_.Exception.Message)
+                [void]$copyErrors.Add($dstFile)
+            }
         }
         if ($includeAttachments -and $s.hasAttachments) {
             $attSrc = Join-Path $srcDir $s.id
@@ -5675,7 +5716,7 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
             # folders left by the old restore code are carried as they are. The
             # count and the size are taken from the copy so they describe what
             # the backup actually contains.
-            Copy-Tree $attSrc $attDst
+            Copy-Tree $attSrc $attDst '' -Collect $copyErrors
             $inner = @(Get-ChildItem -LiteralPath $attDst -Recurse -File -Force -ErrorAction SilentlyContinue)
             $fileCount += $inner.Count
             $totalBytes += (Get-FolderSize $attDst)
@@ -5725,10 +5766,14 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
         dbFiles            = $dbCopied
         fileCount          = $fileCount
         totalBytes         = $totalBytes
+        # How many files could not be copied. 0 = complete snapshot. Anything
+        # else means the backup is usable but incomplete, and the UI says so
+        # instead of reporting a clean success.
+        attachmentErrors   = $copyErrors.Count
         sessions           = $sessionEntries.ToArray()
     }
     Write-JsonFile (Join-Path $dir 'manifest.json') $manifest
-    Write-Log ("backup created: {0} edition={1} sessions={2} bytes={3}" -f $name, $product, $sessionEntries.Count, $totalBytes)
+    Write-Log ("backup created: {0} edition={1} sessions={2} bytes={3} copyErrors={4}" -f $name, $product, $sessionEntries.Count, $totalBytes, $copyErrors.Count)
     return (Get-BackupMeta $name)
 }
 
@@ -6027,6 +6072,11 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
     }
 
     $restored = 0
+    # Files that could not be copied after the database was already updated. The
+    # restore is retryable (the backup still holds everything and the pre-restore
+    # snapshot covers a full rollback), but the result must not claim a clean
+    # success: those conversations would show as "record only" until re-run.
+    $fileErrors = New-Object System.Collections.Generic.List[string]
     $merged = 0
     # $validSelected and the custom* counts were resolved above (before any
     # write); nothing to recompute here. The old time-based sync decided the
@@ -6207,8 +6257,15 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                     if ($base.EndsWith('.file-rollback')) { $sid = $base.Substring(0, $base.Length - '.file-rollback'.Length) }
                     if (-not $validSelected.ContainsKey($sid)) { continue }
                 }
-                Copy-Item -LiteralPath $f.FullName -Destination $target -Force
-                $restored++
+                # -ErrorAction Stop + a counter: Copy-Item is non-terminating, so a
+                # failed copy used to be both silent and counted as restored.
+                try {
+                    Copy-Item -LiteralPath $f.FullName -Destination $target -Force -ErrorAction Stop
+                    $restored++
+                } catch {
+                    Write-Log ('restore file failed: ' + $f.FullName + ' ' + $_.Exception.Message)
+                    [void]$fileErrors.Add($target)
+                }
             }
             foreach ($sd in @(Get-ChildItem -LiteralPath $slugDir.FullName -Directory -ErrorAction SilentlyContinue)) {
                 $target = Join-Path $dst $sd.Name
@@ -6219,7 +6276,7 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
                     # transcript loop above.
                     if (-not $validSelected.ContainsKey($sd.Name)) { continue }
                 }
-                Copy-Tree $sd.FullName $target $sd.Name
+                Copy-Tree $sd.FullName $target $sd.Name -Collect $fileErrors
             }
         }
     }
@@ -6248,7 +6305,7 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
 
     # Deliberately NOT restarting the client here: the page asks the user whether
     # to open it, and only starts it if they say yes.
-    Write-Log ("restore done: {0} edition={1} from={2} cross={3} mode={4} files={5} merged={6} remap={7} pushed={8} added={9} kept={10}" -f $name, $product, $sourceEdition, $crossEdition, $mode, $restored, $merged, $remapDone, $customPushed, $customAdded, $customKept)
+    Write-Log ("restore done: {0} edition={1} from={2} cross={3} mode={4} files={5} merged={6} remap={7} pushed={8} added={9} kept={10} fileErrors={11}" -f $name, $product, $sourceEdition, $crossEdition, $mode, $restored, $merged, $remapDone, $customPushed, $customAdded, $customKept, $fileErrors.Count)
     return [pscustomobject]@{
         ok            = $true
         mode          = $mode
@@ -6257,6 +6314,9 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
         crossEdition  = $crossEdition
         home          = $edHome
         files         = $restored
+        # >0 means the rows are in place but some transcripts/attachments are not:
+        # the UI must offer "run it again" instead of a clean success.
+        fileErrors    = $fileErrors.Count
         merged        = $merged
         customPushed  = $customPushed
         customAdded   = $customAdded
@@ -7874,7 +7934,11 @@ function Start-AppWindow([string]$url) {
             "--app=$url",
             "--window-size=1220,800",
             "--window-position=140,80",
-            "--user-data-dir=$profileDir",
+            # Start-Process joins the array with spaces and adds no quotes of its
+            # own, so an unquoted value with a space ("C:\Users\Jane Doe\...")
+            # arrives as two arguments and the profile path is truncated. The
+            # literal quotes below survive both the join and the child's parser.
+            "--user-data-dir=`"$profileDir`"",
             '--no-first-run',
             '--no-default-browser-check',
             '--disable-features=Translate,msEdgeSplitScreen',
