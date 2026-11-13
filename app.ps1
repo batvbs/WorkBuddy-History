@@ -219,12 +219,20 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
         $plan.Add([pscustomobject]@{ File = $f; Flat = $flat; Stripped = ($flat -ne $rel) })
     }
 
-    # names the real attachments are entitled to; a relocated or flattened file
-    # must never take one of them
+    # Names the real attachments need: their own path AND every parent directory.
+    # Reserving only the file paths left a hole - a relocated a.txt could take the
+    # name a-inner1.txt, and then the canonical a-inner1.txt\b.txt could not get
+    # its directory: it degraded to a-inner1.txt-b.txt, i.e. a real attachment at
+    # the wrong path, which SHA-256 dedupe cannot catch because the name was free
+    # when it was allocated.
     $reserved = @{}
+    $dstLc = $dstRoot.ToLowerInvariant()
     foreach ($it in $plan) {
-        if (-not $it.Stripped) {
-            $reserved[(Join-Path $dstRoot $it.Flat).ToLowerInvariant()] = $true
+        if ($it.Stripped) { continue }
+        $acc = $dstLc
+        foreach ($seg in ($it.Flat -split '\\')) {
+            $acc = $acc + '\' + $seg.ToLowerInvariant()
+            $reserved[$acc] = $true
         }
     }
 
