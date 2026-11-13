@@ -143,7 +143,7 @@ function Get-FolderSize([string]$path) {
     return [long]$sum
 }
 
-function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$Strict, $Collect) {
+function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$Strict, $Collect, [switch]$NoOverwrite) {
     # Copy the CONTENTS of $src into $dst, ONE FILE AT A TIME, rebuilding the
     # relative path by hand.
     #
@@ -273,6 +273,10 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
         if (-not $it.Stripped -and -not $relocated) {
             # own path: restore replaces what is there
             if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+                # Merge retries pass -NoOverwrite: fill the holes a previous
+                # partial copy left, but never overwrite the local copy that is
+                # already there (that is the whole point of merge).
+                if ($NoOverwrite -and (Test-Path -LiteralPath $target -PathType Leaf)) { continue }
                 if (Copy-Or-Defer $f.FullName $target $hard) { $written[$target.ToLowerInvariant()] = $true }
                 continue
             }
@@ -5774,6 +5778,14 @@ function New-Backup([bool]$includeAttachments, [string]$tag, [string]$note, [str
     }
     Write-JsonFile (Join-Path $dir 'manifest.json') $manifest
     Write-Log ("backup created: {0} edition={1} sessions={2} bytes={3} copyErrors={4}" -f $name, $product, $sessionEntries.Count, $totalBytes, $copyErrors.Count)
+    # A safety snapshot with holes is not a safety net. Manual backups (no tag)
+    # keep going and report the count so the UI can warn; the pre-* snapshots
+    # exist so that a destructive step can be undone, so the caller must abort
+    # instead of deleting originals that were never copied. Every pre-* caller
+    # already aborts on an exception.
+    if ($copyErrors.Count -gt 0 -and $tag -like 'pre-*') {
+        throw ('backup_incomplete: ' + $copyErrors.Count)
+    }
     return (Get-BackupMeta $name)
 }
 
@@ -6269,12 +6281,22 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
             }
             foreach ($sd in @(Get-ChildItem -LiteralPath $slugDir.FullName -Directory -ErrorAction SilentlyContinue)) {
                 $target = Join-Path $dst $sd.Name
-                if ($mode -eq 'merge' -and (Test-Path -LiteralPath $target)) { continue }
                 if ($mode -eq 'custom') {
                     # The attachment folder is named after the session id; copy
                     # it only for a selected conversation, same rule as the
                     # transcript loop above.
                     if (-not $validSelected.ContainsKey($sd.Name)) { continue }
+                }
+                if ($mode -eq 'merge') {
+                    # Do NOT skip an existing attachment folder. Skipping is fine
+                    # for a transcript file (one file, already complete or not
+                    # there at all) but a folder that exists can still be missing
+                    # files: a previous merge that hit a locked file left exactly
+                    # that, and skipping meant the retry copied nothing and then
+                    # reported zero errors. -NoOverwrite fills the holes without
+                    # touching what is already local.
+                    Copy-Tree $sd.FullName $target $sd.Name -Collect $fileErrors -NoOverwrite
+                    continue
                 }
                 Copy-Tree $sd.FullName $target $sd.Name -Collect $fileErrors
             }
