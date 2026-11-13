@@ -177,19 +177,6 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
     # every failure into an exception, because Fork-Session commits the database
     # once this returns.
 
-    function New-FreePath([string]$path, $taken) {
-        $d = Split-Path -Parent $path
-        $n0 = [IO.Path]::GetFileNameWithoutExtension($path)
-        $e0 = [IO.Path]::GetExtension($path)
-        for ($i = 0; $i -lt 100000; $i++) {
-            if ($i -eq 0) { $c = $path } else { $c = Join-Path $d ($n0 + '-inner' + $i + $e0) }
-            if (Test-Path -LiteralPath $c) { continue }
-            if ($taken -and $taken.ContainsKey($c.ToLowerInvariant())) { continue }
-            return $c
-        }
-        throw ('copy_target_exhausted: ' + $path)
-    }
-
     function Test-ParentDir([string]$path, [bool]$hard) {
         $parent = Split-Path -Parent $path
         if (-not $parent) { return $true }
@@ -263,12 +250,15 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
         if (-not $target) { continue }
 
         if (-not $it.Stripped -and -not $relocated) {
-            # own path: restore replaces, except when a directory owns the name
-            if (Test-Path -LiteralPath $target -PathType Container) {
-                $target = New-FreePath $target $reserved
+            # own path: restore replaces what is there
+            if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+                [void](Copy-Or-Defer $f.FullName $target $hard)
+                continue
             }
-            [void](Copy-Or-Defer $f.FullName $target $hard)
-            continue
+            # a directory owns the name. Never delete it - relocate instead, and
+            # let the dedupe rule below apply, otherwise every restore would add
+            # one more a-innerN.txt next to the identical one it made last time.
+            $relocated = $true
         }
 
         # relocated or flattened: keep the content, not the name
