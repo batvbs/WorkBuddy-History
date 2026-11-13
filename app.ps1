@@ -162,28 +162,30 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
     # allowed to rewrite the home layout and it is where the nesting came from.
     # Backup and fork never flatten, because they must not lose a file.
     #
-    # Two different rules, because the two kinds of source file mean different
-    # things:
-    #   canonical (not flattened) - the real attachment at its real path. Restore
-    #     REPLACES what is there; that is what restoring a conversation means.
-    #     A directory sitting on the name is never deleted - the file takes a
-    #     free name next to it instead.
-    #   flattened - a copy left behind by the old nesting bug. It is kept only
-    #     when its content is not already present: an occupied name is compared
-    #     by SHA256 (equal length is not identity: AB vs CD), and anything that
-    #     is not an exact duplicate is stored as name-innerN.ext.
-    # Neither rule may drop a file silently: running out of names throws rather
-    # than pretending the copy succeeded, and -Strict turns every failure into an
-    # exception, because Fork-Session commits the database once this returns.
+    # WHERE a file ends up decides HOW a collision is handled:
+    #   at its own path (canonical, not relocated) - restore means replace, so the
+    #     backup copy wins. A directory sitting on that name is never deleted; the
+    #     file is relocated instead and then follows the rule below.
+    #   anywhere else (flattened duplicate, or relocated because the path was
+    #     taken) - the name no longer means anything, so an existing file is only
+    #     treated as a duplicate when its SHA256 matches (equal length is not
+    #     identity: AB vs CD); otherwise a free name is used.
+    # Canonical paths are reserved up front, so an earlier relocated file can
+    # never grab a name a later canonical file is going to claim - the result no
+    # longer depends on the order the tree is walked in.
+    # Nothing is dropped silently: running out of names throws, and -Strict turns
+    # every failure into an exception, because Fork-Session commits the database
+    # once this returns.
 
-    function New-FreePath([string]$path) {
-        if (-not (Test-Path -LiteralPath $path)) { return $path }
+    function New-FreePath([string]$path, $taken) {
         $d = Split-Path -Parent $path
         $n0 = [IO.Path]::GetFileNameWithoutExtension($path)
         $e0 = [IO.Path]::GetExtension($path)
-        for ($i = 1; $i -lt 100000; $i++) {
-            $c = Join-Path $d ($n0 + '-inner' + $i + $e0)
-            if (-not (Test-Path -LiteralPath $c)) { return $c }
+        for ($i = 0; $i -lt 100000; $i++) {
+            if ($i -eq 0) { $c = $path } else { $c = Join-Path $d ($n0 + '-inner' + $i + $e0) }
+            if (Test-Path -LiteralPath $c) { continue }
+            if ($taken -and $taken.ContainsKey($c.ToLowerInvariant())) { continue }
+            return $c
         }
         throw ('copy_target_exhausted: ' + $path)
     }
@@ -200,6 +202,11 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
             if ($hard) { throw }
             return $false
         }
+    }
+
+    function Copy-Or-Defer([string]$from, [string]$to, [bool]$hard) {
+        try { Copy-Item -LiteralPath $from -Destination $to -Force -ErrorAction Stop; return $true }
+        catch { if ($hard) { throw } else { Write-Log ('copy failed: ' + $from + ' -> ' + $to); return $false } }
     }
 
     if (-not (Test-Path -LiteralPath $src)) { return }
@@ -225,13 +232,23 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
         $plan.Add([pscustomobject]@{ File = $f; Flat = $flat; Stripped = ($flat -ne $rel) })
     }
 
-    # canonical files claim their names first, whatever order the tree was walked
+    # names the real attachments are entitled to; a relocated or flattened file
+    # must never take one of them
+    $reserved = @{}
+    foreach ($it in $plan) {
+        if (-not $it.Stripped) {
+            $reserved[(Join-Path $dstRoot $it.Flat).ToLowerInvariant()] = $true
+        }
+    }
+
+    # canonical files first, whatever order the tree was walked
     $ordered = @($plan | Where-Object { -not $_.Stripped }) + @($plan | Where-Object { $_.Stripped })
 
     foreach ($it in $ordered) {
         $f = $it.File
         $rel = $it.Flat
         $target = $null
+        $relocated = $false
 
         # wanted path first; if a file sits where the path needs a directory, fall
         # back once to a flat name in the root. Strict mode never falls back: a
@@ -241,25 +258,34 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
             if (Test-ParentDir $cand $hard) { $target = $cand; break }
             if ($hard) { throw ('copy_parent_blocked: ' + $cand) }
             $rel = ($it.Flat -replace '\\', '-')
+            $relocated = $true
         }
         if (-not $target) { continue }
 
-        if (-not $it.Stripped) {
-            if (Test-Path -LiteralPath $target -PathType Container) { $target = New-FreePath $target }
-            try { Copy-Item -LiteralPath $f.FullName -Destination $target -Force -ErrorAction Stop }
-            catch { if ($hard) { throw } else { Write-Log ('copy failed: ' + $f.FullName + ' -> ' + $target) } }
+        if (-not $it.Stripped -and -not $relocated) {
+            # own path: restore replaces, except when a directory owns the name
+            if (Test-Path -LiteralPath $target -PathType Container) {
+                $target = New-FreePath $target $reserved
+            }
+            [void](Copy-Or-Defer $f.FullName $target $hard)
             continue
         }
 
+        # relocated or flattened: keep the content, not the name
         $skip = $false
         $chosen = $null
         $csDir = Split-Path -Parent $target
         $csName = [IO.Path]::GetFileNameWithoutExtension($target)
         $csExt = [IO.Path]::GetExtension($target)
         for ($i = 0; $i -lt 100000; $i++) {
-            $cand = $target
-            if ($i -gt 0) { $cand = Join-Path $csDir ($csName + '-inner' + $i + $csExt) }
-            if (-not (Test-Path -LiteralPath $cand)) { $chosen = $cand; break }
+            if ($i -eq 0) { $cand = $target } else { $cand = Join-Path $csDir ($csName + '-inner' + $i + $csExt) }
+            if (-not (Test-Path -LiteralPath $cand)) {
+                # nothing there yet: take it unless a canonical file still owns it
+                if ($reserved.ContainsKey($cand.ToLowerInvariant())) { continue }
+                $chosen = $cand
+                break
+            }
+            # occupied: identical content is a duplicate, anything else moves on
             $existing = Get-Item -LiteralPath $cand -Force -ErrorAction SilentlyContinue
             if ($existing -and -not $existing.PSIsContainer -and $existing.Length -eq $f.Length) {
                 $hSrc = Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue
@@ -269,8 +295,7 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
         }
         if ($skip) { continue }
         if (-not $chosen) { throw ('copy_target_exhausted: ' + $target) }
-        try { Copy-Item -LiteralPath $f.FullName -Destination $chosen -Force -ErrorAction Stop }
-        catch { if ($hard) { throw } else { Write-Log ('copy failed: ' + $f.FullName + ' -> ' + $chosen) } }
+        [void](Copy-Or-Defer $f.FullName $chosen $hard)
     }
 }
 
