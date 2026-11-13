@@ -192,8 +192,19 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
     }
 
     function Copy-Or-Defer([string]$from, [string]$to, [bool]$hard) {
-        try { Copy-Item -LiteralPath $from -Destination $to -Force -ErrorAction Stop; return $true }
-        catch {
+        # Write next to the target and rename when the copy is complete. A copy
+        # that dies halfway (full disk, crash) then leaves a .wbtmp file behind
+        # instead of a truncated file under the real name - which matters because
+        # a merge retry skips names that already exist and would otherwise keep
+        # the truncated file forever while reporting no error at all.
+        $tmp = $to + '.wbtmp'
+        try {
+            if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+            Copy-Item -LiteralPath $from -Destination $tmp -Force -ErrorAction Stop
+            Move-Item -LiteralPath $tmp -Destination $to -Force -ErrorAction Stop
+            return $true
+        } catch {
+            if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
             if ($hard) { throw }
             Write-Log ('copy failed: ' + $from + ' -> ' + $to)
             # Non-strict callers used to lose this silently: the log line is only
@@ -209,12 +220,24 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
     if (-not (Test-Path -LiteralPath $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
     $srcRoot = [IO.Path]::GetFullPath($src).TrimEnd('\')
     $dstRoot = [IO.Path]::GetFullPath($dst).TrimEnd('\')
-    $errAction = 'SilentlyContinue'
-    if ($Strict) { $errAction = 'Stop' }
     $hard = [bool]$Strict
 
     $plan = New-Object System.Collections.Generic.List[object]
-    foreach ($f in @(Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Force -ErrorAction $errAction)) {
+    # Enumerating can fail as well (permissions, a folder that disappears mid-walk).
+    # -ErrorAction SilentlyContinue used to swallow that and return an empty list:
+    # nothing got copied, $Collect stayed empty, and a safety backup looked
+    # complete while the whole subtree was missing. Fail closed: if we cannot even
+    # list the files, that counts as an error and a pre-* backup will abort.
+    $found = @()
+    try {
+        $found = @(Get-ChildItem -LiteralPath $srcRoot -Recurse -File -Force -ErrorAction Stop)
+    } catch {
+        if ($hard) { throw }
+        Write-Log ('copy enumerate failed: ' + $srcRoot + ' ' + $_.Exception.Message)
+        if ($null -ne $Collect) { try { [void]$Collect.Add($srcRoot + ' (enumerate failed)') } catch { } }
+        return
+    }
+    foreach ($f in $found) {
         $rel = $f.FullName.Substring($srcRoot.Length).TrimStart('\')
         if (-not $rel) { continue }
         $flat = $rel
@@ -276,7 +299,14 @@ function Copy-Tree([string]$src, [string]$dst, [string]$flattenSelf, [switch]$St
                 # Merge retries pass -NoOverwrite: fill the holes a previous
                 # partial copy left, but never overwrite the local copy that is
                 # already there (that is the whole point of merge).
-                if ($NoOverwrite -and (Test-Path -LiteralPath $target -PathType Leaf)) { continue }
+                if ($NoOverwrite -and (Test-Path -LiteralPath $target -PathType Leaf)) {
+                    # The local file stays (merge never overwrites), so it is final:
+                    # let a flattened duplicate dedupe against it. Without this a
+                    # retry wrote no canonical target into $written, and the nested
+                    # duplicate was saved as a-inner1.txt every single time.
+                    $written[$target.ToLowerInvariant()] = $true
+                    continue
+                }
                 if (Copy-Or-Defer $f.FullName $target $hard) { $written[$target.ToLowerInvariant()] = $true }
                 continue
             }
