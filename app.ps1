@@ -5805,6 +5805,14 @@ function Restore-Backup([string]$name, [string]$mode, [bool]$remap, [string]$tar
         [void](Stop-Client $procName)
         Start-Sleep -Milliseconds 600
     }
+    # The plan read above may have filled the 10-second session cache, and
+    # New-Backup picks transcript / attachment files from that index. A
+    # conversation the client created between the scan and the shutdown would be
+    # missing its FILES while its db row IS in the safety backup (that copy reads
+    # the database directly) - an incomplete rollback point. Drop the cache so the
+    # snapshot rescans the stopped client's real state.
+    $script:SessionCache = @{}
+    $script:SessionCacheAt = @{}
 
     # safety net: snapshot the current state first.
     # A cross edition restore always takes one, even in merge mode, because it may

@@ -2731,14 +2731,20 @@ $('#btnAllSessions').onclick = async ()=>{
         <button class="btn primary" id="doFork">创建分叉副本</button></div>
     </div>`;
     document.body.appendChild(layer);
-    const close = ()=>{ layer.remove(); popModalLayer(layer); };
+    // 请求在途时不许关窗：取消/× 关掉图层并不会取消 /api/sessions/fork，
+    // 用户再打开确认又提交一次会拿到另一个新 UUID，最后得到两份副本。
+    let forking = false;
+    const close = ()=>{ if(forking) return; layer.remove(); popModalLayer(layer); };
     layer.querySelectorAll('[data-x]').forEach(b=> b.onclick = close);
     pushModalLayer(layer, close);
     $('#doFork').onclick = async ()=>{
       const btn = $('#doFork');
+      if(forking) return;
+      forking = true;
       btn.disabled = true;
       try{
         const res = await api('/api/sessions/fork', { edition: r.edition || state.edition, id: rec.id });
+        forking = false;          // 请求已结束，允许关窗
         changed = true;
         close();
         // 整份重拉而不是本地 push 一行：副本的真实大小 / 时间以库里的为准，
@@ -2753,6 +2759,7 @@ $('#btnAllSessions').onclick = async ()=>{
         }
         toast('已创建分叉副本', 'ok');
       }catch(err){
+        forking = false;
         btn.disabled = false;
         toast('分叉失败：' + errText(err.message), 'err');
       }
@@ -2851,9 +2858,11 @@ $('#btnAllSessions').onclick = async ()=>{
         try{
           await api('/api/client/stop', { product: r.edition || state.edition });
           changed = true; close();
-          // 用后端重拉后的 running 为准，不靠本地猜
+          // 用后端重拉后的 running 为准：Stop-Client 会吞掉结束进程的失败，
+          // 只看接口成功就报「已关闭」会在客户端仍活着时给出错误结论。
           await reloadList();
-          toast('已关闭客户端', 'ok');
+          if(running) toast('关闭失败：客户端仍在运行，请手动退出后再试', 'err');
+          else toast('已关闭客户端', 'ok');
         }catch(e){ toast('关闭失败：' + errText(e.message), 'err'); }
         finally{ busy(false); }
       };
