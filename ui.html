@@ -210,8 +210,23 @@
   .sess-row{border-bottom:1px solid var(--line-2)}
   .sess-row:last-child{border-bottom:0}
   .sess-row:hover{background:#f8fafd}
+  /* 刚创建的副本：短暂高亮一下，否则几十条里根本注意不到它 */
+  .sess-row.flash{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
   .sess-row .t{min-width:0}
   .sess-row .t b{display:block;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sess-row .t .ttl{display:flex;align-items:center;gap:5px;min-width:0}
+  .sess-row .t .ttl b{flex:0 1 auto;min-width:0}
+  .forkbtn{
+    flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+    width:20px;height:20px;border:1px solid var(--line-2);border-radius:6px;
+    background:#fff;color:var(--muted);cursor:pointer;padding:0;
+  }
+  .forkbtn:hover:not(:disabled){color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+  .forkbtn:disabled{opacity:.4;cursor:not-allowed}
+  /* 刷新按钮：点击时图标转一圈，给个「正在重新读取」的即时反馈 */
+  .refresh-btn{flex:0 0 auto;height:32px;width:34px;display:inline-flex;align-items:center;justify-content:center;padding:0}
+  .refresh-btn.spin svg{animation:spin .6s linear}
+  @keyframes spin{to{transform:rotate(360deg)}}
   .sess-row .t span{display:block;font-size:10.5px;color:var(--faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sess-row .t .ttl{display:flex;align-items:center;gap:6px;min-width:0}
   .sess-row .t .ttl b{flex:0 1 auto;min-width:0}
@@ -343,15 +358,52 @@
   .opt input{margin:3px 0 0}
   .opt .o-t{font-size:13px;font-weight:600}
   .opt .o-d{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.6}
-  /* 按时间同步的冲突清单：只读，两边的数据并排对照 */
-  .sync-list{margin-top:8px;border:1px solid var(--line);border-radius:10px;overflow:hidden;max-height:230px;overflow-y:auto}
-  .sync-row{padding:8px 11px;border-bottom:1px solid var(--line-2)}
-  .sync-row:last-child{border-bottom:0}
-  .sync-row:nth-child(odd){background:#fafbfe}
-  .sync-t{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .sync-pair{display:flex;gap:14px;flex-wrap:wrap;margin-top:3px}
-  .sync-side{font-size:11.5px;color:var(--muted);font-family:Consolas,"Cascadia Mono",monospace}
-  .sync-side i{font-style:normal;color:var(--faint);margin-right:5px;font-family:inherit}
+  /* 自定义恢复：逐条二选一清单（顶部/组内全选框 + 四组折叠 + 左右单选区） */
+  .cust-f{justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+  .cust-remap{flex:0 0 auto;max-width:360px}
+  .cust-remap-sub{display:block;font-size:11px;margin-top:2px;color:var(--muted)}
+  .cust-btns{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .cust-count{font-size:11.5px;color:var(--muted);margin-right:4px}
+  .chead{display:flex;gap:10px;padding:8px 10px;background:#f7f9fc;border:1px solid var(--line);border-radius:9px;margin:10px 0 8px}
+  .ch-col{flex:1 1 0;display:flex;align-items:center;gap:10px;font-size:12.5px}
+  .ch-col b{color:var(--text)}
+  .ch-all{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--muted);cursor:pointer}
+  .ch-all input{margin:0}
+  .cgroup{margin-bottom:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  /* 组头整行都可点：按钮 flex:1 撑满「标题 → 右侧全选框」之间的空白，
+     否则只有文字本身能点，中间一大片是死区。padding 也从行移到按钮上，
+     这样上下边缘同样在可点范围内。 */
+  .cg-head{display:flex;align-items:stretch;justify-content:space-between;gap:10px;padding:0;background:#fbfcfe;border-bottom:1px solid var(--line-2);flex-wrap:wrap}
+  .cg-toggle{flex:1 1 auto;min-width:0;background:none;border:0;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--text);padding:7px 10px;display:flex;align-items:center;justify-content:flex-start;gap:6px;text-align:left}
+  .cg-toggle:hover{background:#f2f6fd;color:var(--accent)}
+  .cg-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .cg-arrow{color:var(--faint);font-size:11px;width:12px;display:inline-block}
+  .cg-n{color:var(--faint);font-weight:400;font-size:11px}
+  .cg-alls{display:inline-flex;gap:12px;align-items:center;padding-right:10px;flex:0 0 auto}
+  .cg-body{padding:6px 10px}
+  .cg-empty{font-size:11.5px;color:var(--faint);padding:6px 2px}
+  .crow{padding:7px 0;border-bottom:1px dashed var(--line-2)}
+  .crow:last-child{border-bottom:0}
+  .crow-h{font-size:12.5px;margin-bottom:4px;display:flex;align-items:center;flex-wrap:wrap;gap:2px}
+  .cname{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+  .cst{display:inline-block;font-size:10.5px;padding:0 6px;border-radius:5px;font-weight:600;line-height:1.7;margin-left:6px}
+  .cst.arch{background:#f1f4f9;color:var(--muted)}
+  .cst.del{background:var(--red-soft);color:var(--red)}
+  .cpick{display:flex;gap:10px}
+  .cside{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:3px;padding:6px 9px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:#fff;font-size:11.5px;color:var(--muted)}
+  .cside:hover{border-color:#d3dcea;background:#fbfcfe}
+  .cside.on{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent)}
+  /* 自定义恢复清单：单独 640px，不影响 .wide / .xwide 的其它弹窗 */
+  .modal.cust-modal{width:640px;max-width:calc(100vw - 32px)}
+  .cust-pick{font-size:12.5px;font-weight:600;color:var(--accent);margin-left:4px}
+  .cradio{display:inline-flex;align-items:center;gap:5px;font-weight:600;color:var(--text)}
+  .cradio input{margin:0}
+  .cmeta{display:flex;flex-wrap:wrap;gap:1px 12px}
+  .cln{white-space:nowrap}
+  .at.newer{color:var(--green);font-weight:700}
+  .sz.bigger{color:var(--amber);font-weight:700}
+  .noatt{font-weight:700}
+  .cmiss{color:var(--faint);font-style:italic}
   .check{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;padding:6px 0}
   .check input{margin:3px 0 0}
   .kv{display:grid;grid-template-columns:84px 1fr;gap:6px 12px;font-size:12.5px;margin:10px 0 4px}
@@ -932,14 +984,18 @@ const ERR = {
   not_logged_in:'当前没有登录账号',
   logout_failed:'清空登录态失败',
   save_before_logout_failed:'没能先保存当前账号的登录态，已中止（没有清空任何东西）',
-  unknown_edition:'未知的客户端版本',
   models_missing:'这个版本还没有 models.json（先在客户端里导入过一个模型才会生成）',
   models_malformed:'models.json 不是合法 JSON，客户端现在读不了它。先修好文件再改，否则会越改越乱',
   models_empty:'models.json 是空的',
   model_not_found:'这条模型已经不在了（可能刚在客户端里改过），请重新读取',
   model_id_required:'id 不能为空',
   key_encrypted:'这条的密钥是加密存的，本程序没法解开。点「编辑」把密钥重新填一次，就能测了',
-  models_serialize_failed:'生成的 JSON 没通过校验，已中止，原文件没有动'
+  models_serialize_failed:'生成的 JSON 没通过校验，已中止，原文件没有动',
+  bad_mode:'不支持这种恢复方式，请重新打开恢复窗口再选一次',
+  selected_ids_required:'请求缺少要恢复的对话清单，请重新确认恢复',
+  selected_ids_must_be_array:'选择的对话数据不合法，请重新打开清单再选一次',
+  selected_ids_invalid:'选择的对话里有无效的条目，请重新打开清单再选一次',
+  too_many_selected:'一次最多恢复 5000 个对话，请少选一些再确认'
 };
 const errText = e => {
   const s = String(e == null ? '' : e);
@@ -1816,19 +1872,13 @@ async function restoreDialog(name){
       <label class="opt"><input type="radio" name="rmode" value="full" checked>
         <div><div class="o-t">完整恢复（推荐）</div>
         <div class="o-d">把对话库回滚到备份时刻：备份之后的对话会从列表里消失。恢复前会自动给当前状态再做一份备份。</div></div></label>
-      <label class="opt"><input type="radio" name="rmode" value="sync">
-        <div><div class="o-t">按时间同步</div>
-        <div class="o-d">两边都有的对话逐条比：<b>备份里更大且更新</b>的，用备份那份覆盖；<b>本机这份更大且更新</b>的保持不动（备份那份更旧更小，说明本机已经往前走了）；<b>大小和时间完全一样</b>的也不动。
-          其余情况（比如更新但更小、更大但更旧）拿不准谁更好，会<b>列出来让你自己定</b>，不替你选。
-          备份里有、这边没有的会补进来；这边有、备份里没有的<b>不删</b>。和完整恢复一样，动手前强制备份。</div></div></label>
+      <label class="opt"><input type="radio" name="rmode" value="custom">
+        <div><div class="o-t">自定义恢复</div>
+        <div class="o-d">自己决定恢复哪些对话：点「确认恢复」后会列出备份里的全部对话，逐条在<b>备份</b>和<b>本机</b>之间二选一，只有你选了「备份」的才会被覆盖，不替你做判断。
+          本机独有、备份里没有的对话<b>不会显示、也不会删除</b>；和完整恢复一样，动手前强制备份。</div></div></label>
       <label class="opt"><input type="radio" name="rmode" value="merge">
         <div><div class="o-t">仅补齐缺失</div>
         <div class="o-d">把备份里有、这台机器上没有的对话补进来：数据库里缺的对话会插入，磁盘上缺的对话文件也会补回，已有的不覆盖、不删除。</div></div></label>
-
-      <div id="syncBox" style="display:none;margin-top:4px">
-        <div id="syncPlan" class="note" style="margin-top:6px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg><div>正在对比…</div></div>
-        <div id="syncConflicts"></div>
-      </div>
 
       ${diffAccount ? `<div class="note" id="remapNote" style="margin-top:6px;display:${chk.allowed?'none':'block'}">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
@@ -1837,8 +1887,9 @@ async function restoreDialog(name){
         <label class="check" style="margin-top:8px">
           <input type="checkbox" id="cbRemap" ${chk.allowed?'checked':''} ${chk.allowed?'':'disabled'}>
           <span>把对话归属改写为当前账号
-            <span style="display:block;font-size:11.5px;margin-top:2px;color:${chk.allowed?'var(--muted)':'var(--amber)'}">
-              ${chk.allowed ? '把数据库里这些对话的归属改成当前账号（只改归属，不动内容；备份里没合并的事务日志会先自动合并）' : (REASON[chk.reason] || '当前不可用')}
+            <span style="display:block;font-size:11.5px;margin-top:2px;color:${chk.allowed?'var(--muted)':'var(--amber)'}"
+                  ${chk.allowed ? 'title="备份里没合并的事务日志会先自动合并"' : ''}>
+              ${chk.allowed ? '只改归属，不动内容' : (REASON[chk.reason] || '当前不可用')}
             </span>
           </span>
         </label>` : ''}
@@ -1866,87 +1917,19 @@ async function restoreDialog(name){
     };
   }
 
-  /* ---------- 按时间同步：先取一份「打算怎么做」的清单 ---------- */
-  // 这份清单是只读的（后端 /api/backup/sync-plan 不写任何文件），
-  // 目的就是让用户在点「确认」之前看见：会覆盖哪些、不动哪些、
-  // 哪些拿不准需要他自己定。恢复时后端会重算同一份清单再执行，
-  // 所以这里看到什么，执行就是什么。
-  let syncLoaded = false;
-  const fmtSize = b => {
-    const n = Number(b) || 0;
-    if(n >= 1024*1024) return (n/1024/1024).toFixed(1) + ' MB';
-    if(n >= 1024) return (n/1024).toFixed(0) + ' KB';
-    return n + ' B';
-  };
-  async function loadSyncPlan(){
-    if(syncLoaded) return;
-    const box = $('#syncPlan');
-    if(!box) return;
-    box.className = 'note';
-    box.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg><div>正在对比…</div>';
-    let p;
-    try{
-      p = await api('/api/backup/sync-plan', { name, target: state.edition });
-    }catch(e){
-      box.className = 'note danger';
-      box.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg><div>对比失败：' + esc(errText(e.message)) + '</div>';
-      return;
-    }
-    syncLoaded = true;
-    box.className = 'note';
-    box.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg><div>'
-      + (p.hasBackupDb ? '' : '<b>这份备份里没有数据库</b>，只能按文件补，无法逐条比较大小/时间。<br>')
-      + '备份里共 <b>' + p.total + '</b> 个对话：'
-      + '<b>' + p.pushCount + '</b> 个会用备份覆盖（备份那侧更大且更新），'
-      + '<b>' + p.addCount + '</b> 个是这边没有的（直接补进来），'
-      + '<b>' + p.keepCount + '</b> 个不动（两份一样，或者本机那份既更大又更新）'
-      + (p.conflictCount ? '，<b>' + p.conflictCount + '</b> 个拿不准——下面列出来了，这些<b>不会</b>被改动' : '')
-      + '。</div>';
-
-    const host = $('#syncConflicts');
-    if(!host) return;
-    if(!p.conflictCount){ host.innerHTML = ''; return; }
-    // 冲突清单：只读展示。用户要保留哪一份，靠「改完之后再跑一次完整恢复/仅补齐」
-    // 或手工处理——这里刻意不提供「就地二选一」，因为一次恢复里混两种策略
-    // 会让「刚才那份备份」变得难以预测。
-    host.innerHTML = `<div class="note warn" style="margin-top:8px">
-        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
-        <div><b>${p.conflictCount} 个对话两边都有、但判断不一致，已被跳过</b><br>
-        下面每一行给出两边的「大小」和「更新时间」。想用哪一份，恢复完成后单独处理这一条即可
-        （这次同步不会碰它们，所以不会丢）。</div></div>
-      <div class="sync-list">
-        ${asArr(p.conflicts).map(c=>`<div class="sync-row">
-          <div class="sync-t">${esc(c.title || c.id)}</div>
-          <div class="sync-pair">
-            <span class="sync-side"><i>备份</i>${fmtSize(c.srcBytes)} · ${esc(c.srcAt || '—')}</span>
-            <span class="sync-side"><i>本机</i>${fmtSize(c.dstBytes)} · ${esc(c.dstAt || '—')}</span>
-          </div>
-        </div>`).join('')}
-      </div>`;
-  }
-  document.querySelectorAll('input[name=rmode]').forEach(r=>{
-    r.onchange = ()=>{
-      const on = r.value === 'sync' && r.checked;
-      const sb = $('#syncBox');
-      if(sb) sb.style.display = on ? 'block' : 'none';
-      if(on) loadSyncPlan();
-    };
-  });
-
-  $('#doRestore').onclick = async ()=>{
-    const mode = (document.querySelector('input[name=rmode]:checked')||{}).value || 'full';
-    const remapEl = $('#cbRemap');
-    const remap = !!(remapEl && remapEl.checked && !remapEl.disabled);
+  /* ---------- 执行恢复并展示结果（full / merge / custom 共用） ----------
+     两个弹窗都调它：第一个弹窗的 full/merge，第二个弹窗的 custom。
+     closeModal() 关掉的是「当前顶层弹窗」，两处都成立。 */
+  async function execRestore(payload, remap){
     closeModal();
     busy(true, '正在恢复对话…', '先给当前状态做安全备份，再写回对话数据');
     try{
-      const r = await api('/api/backup/restore', { name, mode, remap, target: state.edition });
+      const r = await api('/api/backup/restore', payload);
       busy(false);
       const lines = [];
       if(r.crossEdition) lines.push(`跨版本恢复：${prodName(r.sourceEdition)} → ${prodName(r.edition)}`);
-      if(r.mode === 'sync'){
-        lines.push(`按时间同步：用备份覆盖了 ${r.syncPushed} 个对话，新补 ${r.merged} 个，${r.syncKept} 个两边一致没动`
-                   + (r.syncConflicts ? `，${r.syncConflicts} 个判断不一致已跳过` : ''));
+      if(r.mode === 'custom'){
+        lines.push(`自定义恢复：用备份覆盖 ${r.customPushed||0} 个对话，新补 ${r.customAdded||0} 个，${r.customKept||0} 个保持本地不动`);
         lines.push(`一共处理了 ${r.files} 个文件（本机有、备份里没有的对话没有删除）`);
       } else if(r.mode === 'merge'){
         lines.push(r.merged > 0
@@ -1974,6 +1957,279 @@ async function restoreDialog(name){
       busy(false);
       toast('恢复失败：' + errText(e.message), 'err');
     }
+  }
+
+  /* ---------- 自定义恢复：第二个弹窗，逐条在备份/本地之间二选一 ----------
+     「不选 = 按组默认」的落地：每条的 choices 初始值直接取所在组的预选
+     （conflict=都不选 / backupBetter·backupOnly=备份 / localBetter=本地）。
+     用户没碰的条目保持组默认；碰过的覆盖。提交时只收 choices==='backup' 的 id，
+     因此始终是明确的 id 集合。注意只有「备份」会进 selectedIds，所以
+     「本地」和「都不选」对最终结果等价（都不提交该 id）。 */
+  const GROUPS = [
+    { key:'conflict',     label:'日期和大小不一致',       open:true,  def:'none' },
+    { key:'backupBetter', label:'备份里更新更大',         open:false, def:'backup' },
+    { key:'backupOnly',   label:'仅备份存在，本地缺失',   open:false, def:'backup' },
+    { key:'localBetter',  label:'时间相同，或备份更旧且更小', open:false, def:'local' }
+  ];
+  const GROUP_KEYS = GROUPS.map(g=>g.key);
+  const GROUP_DEF = {}; GROUPS.forEach(g=>{ GROUP_DEF[g.key]=g.def; });
+
+  function openCustomDialog(initRemap){
+    closeModal();   // 关掉第一个弹窗，再打开清单弹窗（第二个弹窗）
+    const remapHtml = `<label class="check cust-remap">
+        <input type="checkbox" id="cbRemap2" ${chk.allowed && initRemap ? 'checked' : ''} ${chk.allowed?'':'disabled'}>
+        <span>把对话归属改写为当前账号
+          <span class="cust-remap-sub">${chk.allowed ? '只改归属，不动内容' : (REASON[chk.reason] || '当前不可用')}</span>
+        </span></label>`;
+    modal(`
+      <div class="modal-h">
+        <div><h3>你要恢复哪些对话？<span id="custPick" class="cust-pick">（0/0）</span></h3>
+          <p>${esc(prodName(bEd))} · ${esc(bk.createdAt || name)} · 只列出备份里的对话，本机独有的不会显示、也不会删除</p></div>
+        <button class="x" data-close>&times;</button>
+      </div>
+      <div class="modal-b" id="custBody">
+        <div class="note" id="custMsg"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg><div>正在读取备份清单…</div></div>
+      </div>
+      <div class="modal-f cust-f">
+        ${remapHtml}
+        <div class="cust-btns">
+          <span id="custCount" class="cust-count">正在读取…</span>
+          <button class="btn" data-close>取消</button>
+          <button class="btn primary" id="doCustomRestore" disabled>确认恢复</button>
+        </div>
+      </div>`);
+    // 这个清单只要 640px：两栏对照 + 四组折叠，900 太宽、700 太挤。
+    // 单独加一个类而不是改 .xwide，别的弹窗（备份查看、查看全部）继续用 900。
+    $('#modal').classList.add('cust-modal');
+
+    let rows = [], choices = {}, plan = null;
+    const body = $('#custBody');
+
+    // 标色：两侧都存在才比较；相等不标色；本机缺失（dst.exists===false）也不标。
+    function cmp(it){
+      const s = it.src || {}, d = it.dst || {};
+      const exists = d.exists !== false;
+      const sm = Number(s.ms)||0, dm = Number(d.ms)||0;
+      const sb = Number(s.bytes)||0, db = Number(d.bytes)||0;
+      return {
+        newer:  !exists ? '' : (sm>dm ? 'backup' : (dm>sm ? 'local' : '')),
+        bigger: !exists ? '' : (sb>db ? 'backup' : (db>sb ? 'local' : '')),
+        exists
+      };
+    }
+    function badges(o){
+      o = o || {};
+      return (o.archived ? '<span class="cst arch">已归档</span>' : '')
+           + (o.deleted  ? '<span class="cst del">已删除</span>' : '');
+    }
+    function rowHtml(r){
+      const it = r.it, idx = r.idx, c = cmp(it);
+      const s = it.src || {}, d = it.dst || {};
+      const on = choices[idx];
+      const noAtt = plan.backupHasAttachments === false;
+      return `<div class="crow" data-idx="${idx}">
+        <div class="crow-h"><span class="cname" title="${esc(it.title || it.id)}">${esc(it.title || it.id)}</span></div>
+        <div class="cpick">
+          <label class="cside ${on==='backup'?'on':''}" data-side="backup">
+            <span class="cradio"><input type="radio" name="cr_${idx}" value="backup" ${on==='backup'?'checked':''} aria-label="${esc((it.title || it.id) + '：用备份覆盖')}"> 备份${badges(s)}</span>
+            <span class="cmeta">
+              <span class="cln">更新：<span class="at ${c.newer==='backup'?'newer':''}">${esc(s.at || '—')}</span></span>
+              <span class="cln">大小：<span class="sz ${c.bigger==='backup'?'bigger':''}">${fmtBytes(s.bytes)}</span></span>
+              ${noAtt ? '<span class="cln noatt">无附件</span>' : ''}
+            </span>
+          </label>
+          <label class="cside ${on==='local'?'on':''}" data-side="local">
+            <span class="cradio"><input type="radio" name="cr_${idx}" value="local" ${on==='local'?'checked':''} aria-label="${esc((it.title || it.id) + '：保留本机这份')}"> 本地${c.exists?badges(d):''}</span>
+            <span class="cmeta">
+              ${c.exists
+                ? `<span class="cln">更新：<span class="at ${c.newer==='local'?'newer':''}">${esc(d.at || '—')}</span></span>
+                   <span class="cln">大小：<span class="sz ${c.bigger==='local'?'bigger':''}">${fmtBytes(d.bytes)}</span></span>`
+                : `<span class="cln cmiss">本地没有这份对话</span>`}
+            </span>
+          </label>
+        </div>
+      </div>`;
+    }
+    function paintRow(row){
+      const idx = +row.dataset.idx, on = choices[idx];
+      row.querySelectorAll('.cside').forEach(el=>{
+        const hit = on === el.dataset.side;
+        el.classList.toggle('on', hit);
+        const rb = el.querySelector('input[type=radio]');
+        if(rb) rb.checked = hit;
+      });
+    }
+    // 全选框三态 + 底部计数：任何选择变化后统一刷新，保证左右/全局联动一致。
+    function refreshChecks(){
+      body.querySelectorAll('input[data-scope]').forEach(cb=>{
+        const side = cb.dataset.side;
+        const range = cb.dataset.scope==='global' ? rows : rows.filter(r=>r.group===cb.dataset.g);
+        const picked = range.filter(r=>choices[r.idx]===side).length;
+        cb.checked = range.length>0 && picked===range.length;
+        cb.indeterminate = picked>0 && picked<range.length;
+      });
+      // 标题右侧的（已选备份 / 全部）：左边是这次会用备份覆盖的条数
+      const n = rows.filter(r=>choices[r.idx]==='backup').length;
+      const pick = $('#custPick');
+      if(pick) pick.textContent = '（' + n + '/' + rows.length + '）';
+      const cnt = $('#custCount');
+      if(cnt) cnt.textContent = (plan && plan.hasBackupDb === false)
+        ? '无法逐条选择'
+        : `将用备份覆盖 ${n} 个对话，其余不动`;
+      // 一个都没选时不让点确认：那是一次什么都没发生的恢复，按钮亮着只会让人以为点了有事发生
+      const goBtn = $('#doCustomRestore');
+      if(goBtn) goBtn.disabled = (plan && plan.hasBackupDb === false) || n === 0;
+    }
+    // 全选框：勾上=范围内全设为该侧；取消=把范围内当前该侧的项清成「都不选」。
+    function setAll(scope, g, side, on){
+      const range = scope==='global' ? rows : rows.filter(r=>r.group===g);
+      range.forEach(r=>{
+        if(on) choices[r.idx] = side;
+        else if(choices[r.idx]===side) choices[r.idx] = 'none';
+      });
+      rows.forEach(r=>{
+        const row = body.querySelector(`.crow[data-idx="${r.idx}"]`);
+        if(row) paintRow(row);
+      });
+    }
+
+    // 事件委托只绑一次，挂在 #custBody 上，后续重绘列表不影响。
+    body.addEventListener('change', e=>{
+      const t = e.target;
+      if(t.type==='radio' && t.name && t.name.indexOf('cr_')===0){
+        const row = t.closest('.crow');
+        choices[+row.dataset.idx] = t.value;
+        paintRow(row);
+        refreshChecks();
+      } else if(t.type==='checkbox' && t.dataset.scope){
+        setAll(t.dataset.scope, t.dataset.g, t.dataset.side, t.checked);
+        refreshChecks();
+      }
+    });
+    // 展开/折叠：可点区域就是那个铺满整行的按钮本身。
+    // 按钮与右侧「全选」区之间那条 10px 细缝属于容器，**不响应**（按用户要求），
+    // 所以不再做「点容器也当点标题」的兜底。
+    function toggleGroup(tg){
+      const box = tg.closest('.cgroup').querySelector('.cg-body');
+      const open = box.hasAttribute('hidden');
+      if(open) box.removeAttribute('hidden'); else box.setAttribute('hidden','');
+      tg.setAttribute('aria-expanded', String(open));
+      tg.querySelector('.cg-arrow').textContent = open ? '▾' : '▸';
+    }
+    body.addEventListener('click', e=>{
+      const tg = e.target.closest('.cg-toggle');
+      if(tg) toggleGroup(tg);
+    });
+
+    // 取清单（只读）；失败显示错误、可重试、可关闭。
+    //
+    // 这个弹窗能被 Esc 关掉，而请求还在路上。若此时又打开了另一个清单弹窗，
+    // 旧请求返回后如果照常往下写，就会通过 $('#custPick') / $('#doCustomRestore')
+    // 这类全局选择器改到**新弹窗**的计数与确认按钮（新弹窗清单还是空的，确认
+    // 按钮却被点亮，点下去什么都不恢复还报成功）。所以响应回来先确认自己还活着：
+    // body 是本弹窗的 #custBody，弹窗一关就被 closeModal 清掉，isConnected 变 false。
+    const stillMine = () => !!body && body.isConnected;
+    // 遮罩是全局的：自己已经出局时不要贸然 busy(false)，否则会把新弹窗刚亮的
+    // 遮罩关掉；只有确认当前没有任何清单弹窗时才收起它。
+    const dropBusy = () => { if(!document.querySelector('#custBody')) busy(false); };
+
+    async function loadPlan(){
+      busy(true, '正在读取备份清单…', '对比备份与本机对话，列出可恢复的条目');
+      const msg = $('#custMsg');
+      if(msg){ msg.className='note'; msg.innerHTML='<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg><div>正在读取备份清单…</div>'; }
+      let resp;
+      try{
+        resp = await api('/api/backup/restore-plan', { name, target: state.edition });
+      }catch(e){
+        if(!stillMine()){ dropBusy(); return; }
+        busy(false);
+        if(msg){
+          msg.className='note danger';
+          msg.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>'
+            + '<div>读取清单失败：' + esc(errText(e.message)) + '<br><button class="btn" id="custRetry" style="margin-top:6px">重试</button></div>';
+          $('#custRetry').onclick = loadPlan;
+        }
+        return;
+      }
+      // 请求期间弹窗被关掉或被新弹窗替换：这份结果不属于任何人，丢弃。
+      if(!stillMine()){ dropBusy(); return; }
+      plan = resp;
+      busy(false);
+      // 防御性跳过云端；未知 group 一律归到 conflict（即「其他三组以外」）。
+      const items = asArr(plan.items).filter(it => it && it.id != null && (it.src||{}).transport !== 'cloud');
+      rows = items.map((it,i)=>({ it, idx:i, id:it.id, group: GROUP_KEYS.indexOf(it.group)>=0 ? it.group : 'conflict' }));
+      choices = {};
+      rows.forEach(r=>{ choices[r.idx] = GROUP_DEF[r.group]; });
+
+      // 顶部不再放整段说明（原先那句「备份里共 N 个对话…不选=按组默认」已去掉，
+      // 数量改到标题右侧的（已选/总数），分组规则看组名即可）。只保留真正
+      // 影响操作的两种例外提示。
+      const dbNote = plan.hasBackupDb ? '' : `<div class="note warn"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+        <div><b>这份备份里没有对话数据库</b>，无法逐条选择。请关闭本窗口，改用「完整恢复」或「仅补齐缺失」。</div></div>`;
+      const noAttNote = plan.backupHasAttachments === false
+        ? `<div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+        <div>这份备份<b>不带附件</b>，备份侧会标注「无附件」。</div></div>` : '';
+      const headHtml = `<div class="chead">
+        <div class="ch-col"><b>备份</b><label class="ch-all"><input type="checkbox" data-scope="global" data-side="backup"> 全选备份</label></div>
+        <div class="ch-col"><b>本地</b><label class="ch-all"><input type="checkbox" data-scope="global" data-side="local"> 全选本地</label></div>
+      </div>`;
+      const groupsHtml = GROUPS.map(g=>{
+        const list = rows.filter(r=>r.group===g.key);
+        return `<section class="cgroup" data-group="${g.key}">
+          <div class="cg-head">
+            <button type="button" class="cg-toggle" aria-expanded="${g.open}" data-g="${g.key}"><span class="cg-arrow">${g.open?'▾':'▸'}</span>${esc(g.label)} <span class="cg-n">${list.length} 个</span></button>
+            <span class="cg-alls">
+              <label class="ch-all"><input type="checkbox" data-scope="group" data-g="${g.key}" data-side="backup"> 全选备份</label>
+              <label class="ch-all"><input type="checkbox" data-scope="group" data-g="${g.key}" data-side="local"> 全选本地</label>
+            </span>
+          </div>
+          <div class="cg-body" ${g.open?'':'hidden'}>${list.length ? list.map(rowHtml).join('') : '<div class="cg-empty">这一组没有对话</div>'}</div>
+        </section>`;
+      }).join('');
+      body.innerHTML = dbNote + noAttNote + headHtml + groupsHtml;
+      // 清单里的「改写归属」不能用第一弹窗那套判断：那是按 manifest 账号判的
+      // （同一账号就禁用），但自定义恢复是按**用户选中的 id** 改写，备份里
+      // 可能混着别的账号的对话——那种情况恰恰需要改写，不能被禁用掉。
+      // 这里只要求：当前有登录账号 + 备份里有可读的对话库。
+      const rm2 = $('#cbRemap2');
+      if(rm2){
+        const okCustom = !!(curAcct && curAcct.uid) && plan.hasBackupDb !== false;
+        rm2.disabled = !okCustom;
+        if(!okCustom) rm2.checked = false;
+        const sub = rm2.parentElement.querySelector('.cust-remap-sub');
+        if(sub) sub.textContent = okCustom
+          ? '只改归属，不动内容'
+          : '当前不可用：需要先登录一个账号，且备份里要有可读的对话数据库';
+      }
+      const btn = $('#doCustomRestore');
+      if(btn) btn.disabled = plan.hasBackupDb === false;   // 无 db 名单为空，禁用确认避免空操作
+      refreshChecks();
+    }
+
+    $('#doCustomRestore').onclick = ()=>{
+      const rm = $('#cbRemap2');
+      const remap = !!(rm && rm.checked && !rm.disabled);
+      const selectedIds = rows.filter(r=>choices[r.idx]==='backup').map(r=>r.id);
+      // 后端会拒绝超过 5000 的选择，而 execRestore 会先关掉本弹窗——真等到
+      // 后端报错，用户的选择就全丢了，得从头再选一遍。在这里先拦下，弹窗
+      // 保持打开，让用户减选。
+      if(selectedIds.length > 5000){
+        toast('一次最多恢复 5000 个对话，当前选了 ' + selectedIds.length + ' 个，请少选一些再确认', 'err');
+        return;
+      }
+      execRestore({ name, mode:'custom', selectedIds, remap, target: state.edition }, remap);
+    };
+    loadPlan();
+  }
+
+  $('#doRestore').onclick = ()=>{
+    const mode = (document.querySelector('input[name=rmode]:checked')||{}).value || 'full';
+    const remapEl = $('#cbRemap');
+    const remap = !!(remapEl && remapEl.checked && !remapEl.disabled);
+    // 自定义恢复不在这里执行：先关掉本弹窗、打开第二个「你要恢复哪些对话？」清单，
+    // 由清单弹窗的「确认恢复」收集 selectedIds 后才真正调用 /api/backup/restore。
+    if(mode === 'custom') return openCustomDialog(remap);
+    execRestore({ name, mode, remap, target: state.edition }, remap);
   };
 }
 
@@ -2019,6 +2275,12 @@ $('#btnRecover').onclick = async ()=>{
   const stateTag = s => s.state === 'archived' ? '<span class="badge n">已归档</span>'
                      : (s.state === 'deleted' ? '<span class="badge r">已删除</span>' : '');
   const defCount = list.filter(s=> s.defaultOn !== false).length;
+  // 属于其他账号的对话在默认勾选里——一次「找回」就会把它们从原账号移走。
+  // 这里把后果写明，避免用户以为只是「让它们重新出现」。
+  const otherAcc = list.filter(s=> !s.mine);
+  const otherNote = otherAcc.length
+    ? `<br><b style="color:var(--red)">其中 ${otherAcc.length} 个属于其他账号（${esc(otherAcc[0].shortUid || (otherAcc[0].uid||'').slice(0,8))}，含已删除的），找回会把它们的归属改到当前账号——原账号将不再显示这些对话。</b>`
+    : '';
 
   const groupsHtml = order.map(uid=>{
     const arr = groups[uid];
@@ -2059,6 +2321,7 @@ $('#btnRecover').onclick = async ()=>{
       <div class="note" style="margin-bottom:12px">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
         <div>勾选的对话会被<b>改写为当前账号</b>（${esc(accLabel)}），之后就能在侧栏看到。
+        ${otherNote}
         已归档的找回后<b>仍然是归档状态</b>；已删除的找回后会<b>取消删除状态</b>，重新出现在列表里。
         处理前会自动关闭客户端；完成后由你决定要不要打开客户端。</div>
       </div>
@@ -2297,10 +2560,12 @@ $('#btnAllSessions').onclick = async ()=>{
   }
   busy(false);
 
-  const list = asArr(r.sessions);
-  const accounts = asArr(r.accounts);
+  // let：分叉和客户端开关之后会整份重拉，替换这两个数组
+  let list = asArr(r.sessions);
+  let accounts = asArr(r.accounts);
   const curUid = (r.current && r.current.uid) || '';
-  const running = !!r.running;
+  // let：底部状态栏的「打开 / 关闭客户端」会更新它，列表的锁定状态跟着变
+  let running = !!r.running;
   const filter = { acc: curUid || '*', st: 'all', kw: '' };
   let changed = false;
 
@@ -2350,6 +2615,14 @@ $('#btnAllSessions').onclick = async ()=>{
               : (s.uid ? `<span class="badge n">${esc(nm)}</span>` : '<span class="badge n">未知</span>');
     const tags = s.cloud ? '<span class="badge a">云端</span>' : '';
     const locked = running || s.cloud;
+    // 分叉：把这条对话复制成一条独立的新对话。云端行的正文在服务端，本地
+    // 没有可复制的东西；客户端开着时 db 是只读的（同状态列的规则）。
+    const forkTip = s.cloud ? '云端对话没有本地正文，无法分叉'
+                  : (running ? '客户端正在运行，关闭后可分叉' : '创建分叉副本');
+    const forkBtn = s.cloud ? ''
+      : `<button type="button" class="forkbtn" data-fork="${esc(s.id)}" title="${esc(forkTip)}" ${locked?'disabled':''}>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="4" r="2.2"/><circle cx="6" cy="20" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 6.2v11.6"/><path d="M6 13c0-3 3-4.5 6-4.5h3"/></svg>
+        </button>`;
     // 这段以前是 slug 优先，于是列表里显示的是 c-Users-xxx-2026-10-29 这种
     // projects 下的目录名——它不是路径，只是把路径里的「:」「\」压成了「-」。
     // space 才是数据库里的 cwd，也就是对话真正的目录。云端行两者都没有，
@@ -2358,8 +2631,8 @@ $('#btnAllSessions').onclick = async ()=>{
     const sub = where ? (s.id.slice(0,8) + ' · ' + where) : s.id.slice(0,8);
     const seg = statusCell(s, !locked, s.cloud ? '云端对话存在服务端，本地改不了'
                  : (running ? '客户端正在运行，关闭后可切换' : '点击切换状态'));
-    return `<div class="sess-row">
-      <div class="t"><div class="ttl"><b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
+    return `<div class="sess-row" data-row="${esc(s.id)}">
+      <div class="t"><div class="ttl">${forkBtn}<b title="${esc(s.title||'')}">${esc(s.title || '（无标题）')}</b>${tags}</div>
         <span${where ? ` title="${esc(where)}"` : ''}>${esc(sub)}</span></div>
       <div class="num">${fmtBytes(s.bytes)}</div>
       <div class="num">${esc(fmtAgo(s.updatedMs))}</div>
@@ -2393,8 +2666,8 @@ $('#btnAllSessions').onclick = async ()=>{
   modal(`
     <div class="modal-h">
       <div>
-        <h3>本地对话（${list.length}/${r.total}）</h3>
-        <p>${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
+        <h3 id="allTitle">本地对话（${list.length}/${r.total}）</h3>
+        <p id="allSub">${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
           ? '客户端正在运行，状态列暂时只读'
           : '客户端未打开，点状态列可直接切换'}</p>
       </div>
@@ -2403,19 +2676,29 @@ $('#btnAllSessions').onclick = async ()=>{
     <div class="modal-b" style="padding-bottom:10px">
       <div class="frow" id="fAcc"></div>
       <div class="frow" id="fSt"></div>
-      <input id="q" placeholder="搜索标题 / 路径" style="width:100%;height:32px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;font-family:inherit;outline:none">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="q" placeholder="搜索标题 / 路径" style="flex:1;min-width:0;height:32px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;font-family:inherit;outline:none">
+        <button type="button" class="btn sm refresh-btn" id="btnRefreshAll" title="重新读取对话列表（等同于关掉本窗口再打开）">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+      </div>
       <div class="sess-box">
         <div class="sess-head"><div>对话</div><div class="r">大小</div><div class="r">更新</div><div>归属</div><div>状态 / 设置</div></div>
         <div id="sessBox"></div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11.5px;color:var(--faint)">
         <span>匹配 <b id="sessShown" style="color:var(--accent)">0</b> 个</span>
-        <span style="margin-left:auto">${running ? '客户端运行中，状态列只读' : '状态列：点一下即时生效'}</span>
+        <span style="margin-left:auto" id="allHint">${running ? '客户端运行中，状态列只读' : '状态列：点一下即时生效'}</span>
+        <button type="button" class="btn sm" id="btnClientToggle" title="${running ? '关闭客户端后可修改状态、分叉对话' : '打开客户端'}">${running ? '关闭客户端' : '打开客户端'}</button>
       </div>
     </div>
     <div class="modal-f">
       <button class="btn danger-solid" id="btnPurgeAll">彻底删除</button>
     </div>`, { xwide:true, onClose: ()=>{ if(changed) load().catch(()=>{}); } });
+
+  // 本窗口的身份锚点：刷新/操作是异步的，用户在 await 期间关掉本窗再开一个新
+  // 窗口时，旧请求的回调不能拿过期的数据去改新窗口（会写出上一份的口径）。
+  const dlgAnchor = $('#allTitle');
 
   renderFilters();
   paint();
@@ -2430,7 +2713,29 @@ $('#btnAllSessions').onclick = async ()=>{
   };
   $('#q').oninput = e=>{ filter.kw = e.target.value.trim().toLowerCase(); paint(); };
 
+  // 搜索框右边的刷新：整份重拉（等同关掉本窗口再打开），搜索词和筛选保留
+  $('#btnRefreshAll').onclick = async ()=>{
+    const b = $('#btnRefreshAll');
+    if(!b || b.disabled) return;
+    b.disabled = true;
+    b.classList.add('spin');
+    try{ await reloadList(); }
+    finally{
+      b.classList.remove('spin');
+      b.disabled = false;
+    }
+  };
+
   $('#sessBox').addEventListener('click', async e=>{
+    // 分叉：先于状态切换判断（两个按钮都在行内）
+    const fk = e.target.closest('.forkbtn');
+    if(fk){
+      if(fk.disabled) return;
+      const rec = list.find(x=> x.id === fk.dataset.fork);
+      if(!rec) return;
+      openForkConfirm(rec);
+      return;
+    }
     const b = e.target.closest('.seg button');
     if(!b) return;
     const seg = b.parentElement;
@@ -2448,7 +2753,7 @@ $('#btnAllSessions').onclick = async ()=>{
       rec.archived = res.state === 'archived';
       rec.deleted = res.state === 'deleted';
       changed = true;
-      renderFilters(); paint();
+      repaint();
       toast('已切换为「' + SEG_NAME[res.state] + '」', 'ok');
     }catch(err){
       toast('切换失败：' + errText(err.message), 'err');
@@ -2457,6 +2762,183 @@ $('#btnAllSessions').onclick = async ()=>{
   });
 
   $('#btnPurgeAll').onclick = ()=> openPurgeDialog(r.edition || state.edition);
+
+  /* ---- 分叉确认 + 执行：叠在列表窗口上的图层（不顶掉列表） ---- */
+  function openForkConfirm(rec){
+    const layer = document.createElement('div');
+    layer.className = 'modal-wrap';
+    layer.innerHTML = `<div class="modal">
+      <div class="modal-h"><div><h3>创建分叉副本？</h3><p>${esc(rec.title || '（无标题）')}</p></div>
+        <button class="x" data-x>&times;</button></div>
+      <div class="modal-b">
+        <div class="note">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+          <div>会复制这条对话，生成一条<b>独立的新对话</b>：正文、附件都会复制一份，原标题尾部
+          会加上它的最后更新时间（${esc(fmtStamp(rec.updatedMs))}），方便和原对话区分。
+          原对话保持原样，不受影响。<br>
+          副本是一条新对话，客户端对它的兼容性建议先看一眼；万一显示异常，删掉副本即可。</div>
+        </div>
+      </div>
+      <div class="modal-f"><button class="btn" data-x>取消</button>
+        <button class="btn primary" id="doFork">创建分叉副本</button></div>
+    </div>`;
+    document.body.appendChild(layer);
+    // 请求在途时不许关窗：取消/× 关掉图层并不会取消 /api/sessions/fork，
+    // 用户再打开确认又提交一次会拿到另一个新 UUID，最后得到两份副本。
+    let forking = false;
+    const close = ()=>{ if(forking) return; layer.remove(); popModalLayer(layer); };
+    layer.querySelectorAll('[data-x]').forEach(b=> b.onclick = close);
+    pushModalLayer(layer, close);
+    $('#doFork').onclick = async ()=>{
+      const btn = $('#doFork');
+      if(forking) return;
+      forking = true;
+      btn.disabled = true;
+      try{
+        const res = await api('/api/sessions/fork', { edition: r.edition || state.edition, id: rec.id });
+        forking = false;          // 请求已结束，允许关窗
+        changed = true;
+        close();
+        // 整份重拉而不是本地 push 一行：副本的真实大小 / 时间以库里的为准，
+        // 顺序也回到后端那份（按更新时间排，副本紧挨着原对话）。
+        const refreshed = await reloadList();
+        // 自动滚到副本并闪一下：列表可能有几十条，副本不在视野里就等于「没反应」。
+        const row = document.querySelector('.sess-row[data-row="' + CSS.escape(res.id) + '"]');
+        if(row){
+          try { row.scrollIntoView({ block: 'center' }); } catch(e) { row.scrollIntoView(); }
+          row.classList.add('flash');
+          setTimeout(()=> row.classList.remove('flash'), 1800);
+        }
+        // 副本已经建好了，但列表没刷出来：别说成完全成功，也别让副本「看不见」
+        toast(refreshed ? '已创建分叉副本' : '已创建分叉副本，但列表没刷新，请点右上角刷新查看',
+              refreshed ? 'ok' : 'err');
+      }catch(err){
+        forking = false;
+        btn.disabled = false;
+        toast('分叉失败：' + errText(err.message), 'err');
+      }
+    };
+  }
+  // 标题后缀的时间戳：与后端同一格式（年月日时分），确认弹窗里先给用户看一眼
+  function fmtStamp(ms){
+    const n = Number(ms) || 0;
+    if(n <= 0) return '';
+    const d = new Date(n);
+    const p = x => String(x).padStart(2,'0');
+    return d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  /* ---- 底部状态栏：开 / 关客户端（复用账号切换页的同一组 API） ---- */
+  // 只更新「按钮文案 + 副标题」这类外壳。列表和筛选的重绘交给 repaint，
+  // 分开是为了避免一次操作里重绘两遍（曾经导致上层还没写完就被下层覆盖）。
+  function refreshClientUI(){
+    const t = $('#btnClientToggle');
+    if(t){
+      t.textContent = running ? '关闭客户端' : '打开客户端';
+      t.title = running ? '关闭客户端后可修改状态、分叉对话' : '打开客户端';
+    }
+    // 窗口副标题
+    const sub = $('#allSub');
+    if(sub) sub.innerHTML = `${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
+      ? '客户端正在运行，状态列暂时只读'
+      : '客户端未打开，点状态列可直接切换'}`;
+    // 底部状态栏右侧那行提示：早先它只是打开窗口时渲染的静态文字，
+    // 开关客户端后按钮变了、这行却还停在旧状态（用户实测发现）。
+    const hint = $('#allHint');
+    if(hint) hint.textContent = running ? '客户端运行中，状态列只读' : '状态列：点一下即时生效';
+  }
+
+  // 统一重绘：外壳 + 筛选 + 列表。任何一步出错都要能被看见（toast + console），
+  // 不能像以前那样静默半途而废——用户会以为操作没生效，只能关窗重开。
+  function repaint(){
+    try{
+      refreshClientUI();
+      renderFilters();
+      paint();
+    }catch(e){
+      console.error('[repaint]', e);
+      toast('界面刷新失败：' + (e && e.message ? e.message : e), 'err');
+    }
+  }
+
+  // 操作完成后整份重拉：分叉 / 开关客户端都会改变列表内容或锁定状态，
+  // 用后端返回的真实数据重绘，比在本地拼一行更可靠（也拿到了副本的真实大小）。
+  async function reloadList(){
+    // 返回 true=数据已刷新；false=没刷成（调用方据此决定要不要下结论）
+    try{
+      // refresh=1：让后端跳过 10 秒的会话缓存。刷新按钮连点两下时，
+      // 不带它第二次拿到的还是上一次的旧列表，看起来像「刷新没用」。
+      const qs = [];
+      if(state.edition) qs.push('edition=' + encodeURIComponent(state.edition));
+      qs.push('refresh=1');
+      const fresh = await api('/api/sessions/all?' + qs.join('&'));
+      // 请求期间本窗口被关掉（可能又开了新的一个）：这份结果不属于新窗口
+      if(!dlgAnchor || !dlgAnchor.isConnected) return false;
+      list = asArr(fresh.sessions);
+      accounts = asArr(fresh.accounts);
+      running = !!fresh.running;
+      // 原来筛的账号如果已经不在了（换号 / 重拉后消失），回落到「全部」，
+      // 否则列表会莫名其妙变成空的
+      if(filter.acc !== '*' && !accounts.some(a => (a.uid || '') === filter.acc)) filter.acc = '*';
+      // 标题上的计数也要跟着走，否则刷新后数字还是旧的
+      const ttl = $('#allTitle');
+      if(ttl){
+        const tot = (fresh.total === 0 || fresh.total) ? fresh.total : list.length;
+        ttl.textContent = '本地对话（' + list.length + '/' + tot + '）';
+      }
+      repaint();
+      return true;
+    }catch(e){
+      console.error('[reloadList]', e);
+      toast('列表刷新失败：' + errText(e.message), 'err');
+      return false;
+    }
+  }
+  $('#btnClientToggle').onclick = async ()=>{
+    if(running){
+      // 与账号切换页同款确认：退出会中断正在进行中的任务
+      const layer = document.createElement('div');
+      layer.className = 'modal-wrap';
+      layer.innerHTML = `<div class="modal">
+        <div class="modal-h"><div><h3>关闭客户端？</h3><p>${esc(prodName(r.edition || state.edition))}</p></div>
+          <button class="x" data-x>&times;</button></div>
+        <div class="modal-b"><div class="note warn">
+          <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0-2.8 0z"/></svg>
+          <div>客户端正在运行，退出会关闭它，<b>正在进行中的任务会被中断</b>。</div></div></div>
+        <div class="modal-f"><button class="btn" data-x>取消</button>
+          <button class="btn primary" id="doStop">关闭客户端</button></div>
+      </div>`;
+      document.body.appendChild(layer);
+      const close = ()=>{ layer.remove(); popModalLayer(layer); };
+      layer.querySelectorAll('[data-x]').forEach(b=> b.onclick = close);
+      pushModalLayer(layer, close);
+      $('#doStop').onclick = async ()=>{
+        busy(true, '正在关闭客户端…', '关闭 ' + prodName(r.edition || state.edition));
+        try{
+          await api('/api/client/stop', { product: r.edition || state.edition });
+          changed = true; close();
+          // 用后端重拉后的 running 为准：Stop-Client 会吞掉结束进程的失败，
+          // 只看接口成功就报「已关闭」会在客户端仍活着时给出错误结论。
+          const verified = await reloadList();
+          if(!verified) toast('已发送关闭指令，但没能读到客户端状态，请点刷新确认');
+          else if(running) toast('关闭失败：客户端仍在运行，请手动退出后再试', 'err');
+          else toast('已关闭客户端', 'ok');
+        }catch(e){ toast('关闭失败：' + errText(e.message), 'err'); }
+        finally{ busy(false); }
+      };
+      return;
+    }
+    busy(true, '正在打开客户端…', '启动 ' + prodName(r.edition || state.edition));
+    try{
+      const res = await api('/api/client/start', { product: r.edition || state.edition });
+      if(!res.started){ toast('没能启动：' + errText(res.reason || 'start_timeout'), 'err'); return; }
+      changed = true;
+      const verified = await reloadList();
+      toast(verified ? '已打开客户端' : '已发送启动指令，但没能读到状态，请点刷新确认',
+            verified ? 'ok' : 'err');
+    }catch(e){ toast('操作失败：' + errText(e.message), 'err'); }
+    finally{ busy(false); }
+  };
 };
 
 /* ---------- models ---------- */
@@ -3133,7 +3615,9 @@ async function switchGroup(file){
   if(cur && cur.file === file && file === 'models.json') return;
   busy(true, '正在切换分组…', file);
   try{
-    const r = await api('/api/models/group-switch', { edition: state.edition, file });
+    const ed = state.edition;
+    const r = await api('/api/models/group-switch', { edition: ed, file });
+    if(ed !== state.edition) return;   // 版本已换，丢弃旧响应
     mdlState.groups = asArr(r.groups);
     mdlState.loaded = false;
     await loadModels();
@@ -3149,7 +3633,9 @@ async function switchGroup(file){
 async function newGroup(){
   busy(true, '正在新建分组…', '当前这组会存成标签页，客户端改用新的空文件');
   try{
-    const r = await api('/api/models/group-new', { edition: state.edition });
+    const ed = state.edition;
+    const r = await api('/api/models/group-new', { edition: ed });
+    if(ed !== state.edition) return;   // 守卫放在所有状态写回之前
     mdlState.groups = asArr(r.groups);
     mdlState.loaded = false;
     await loadModels();
@@ -3180,7 +3666,9 @@ function renameGroup(file){
     if(v === old){ back(); return; }
     done = true;
     try{
-      const r = await api('/api/models/group-title', { edition: state.edition, file, title: v });
+      const ed = state.edition;
+      const r = await api('/api/models/group-title', { edition: ed, file, title: v });
+      if(ed !== state.edition) return;   // 版本已换，丢弃旧响应
       mdlState.groups = asArr(r.groups);
       renderGroups();
       toast('标题已改为「' + ((asArr(r.groups).find(x => x.active) || {}).title || v) + '」', 'ok');
@@ -3408,6 +3896,10 @@ function openModelEditor(id, index){
   const isNew = !(m && m.id);
   const val = (f, d) => (m && m[f] != null && m[f] !== '') ? m[f] : (d == null ? '' : d);
   const isEncryptedKey = !!(m && m.apiKeyState === 'encrypted');
+  // 只有「编辑已有条目且它的密钥是加密存的」才允许留空表示保持原密钥。
+  // 无 id 条目会被当成新建（isNew=true，走 create），并没有一份可保持的旧密钥：
+  // 留空必须照常判缺失，否则会存出一条没有密钥的模型。
+  const keepsStoredKey = isEncryptedKey && !isNew;
 
   // 已存档位：客户端表单里这组按钮是多选（supportedEfforts 本来就是数组）。
   const saved = m ? asArr(m.supportedEfforts).map(v=>String(v).trim()).filter(v=>EFFORT_VALUES.includes(v)) : [];
@@ -3459,12 +3951,12 @@ function openModelEditor(id, index){
         <label>API 密钥</label>
         <div class="keywrap">
           <input class="minput mono" id="mf_apiKey" type="password" value="${esc(val('apiKey'))}"
-                 placeholder="${isEncryptedKey ? '已加密，留空则保持不动' : 'sk-...'}">
+                 placeholder="${keepsStoredKey ? '已加密，留空则保持不动' : 'sk-...'}">
           <button class="keybtn" id="mf_eye" type="button" title="显示 / 隐藏">
             <svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
         </div>
-        <div class="hint">${isEncryptedKey
+        <div class="hint">${keepsStoredKey
           ? '这一条在文件里是加密保存的，本程序不显示明文，留空就不会动它。'
           : '明文存在 models.json 里，注意别把整个文件分享出去。'}</div>
         <div class="mreq" id="mf_apiKey_req">这一栏不能为空</div>
@@ -3692,8 +4184,8 @@ function openModelEditor(id, index){
   // 弹窗一打开就三栏全红，等于没有提示作用。
   const touched = { id: false, url: false, apiKey: false };
   function keyBlank(){
-    // 加密密钥留空表示「不动」，不算缺失
-    if(isEncryptedKey && !$key.value) return false;
+    // 已有条目的加密密钥留空表示「不动」，不算缺失（新建没有可保持的旧密钥）
+    if(keepsStoredKey && !$key.value) return false;
     return !$key.value.trim();
   }
   function missing(){
@@ -3797,8 +4289,8 @@ function openModelEditor(id, index){
       supportsReasoning: $reason.checked,
       useCustomProtocol: g('#mf_useCustomProtocol').checked
     };
-    // 密钥：加密条目留空 = 不动；其余留空就是清空（会被上面的校验挡住）
-    if(!(isEncryptedKey && !$key.value)) patch.apiKey = $key.value;
+    // 密钥：已有条目的加密密钥留空 = 不动；其余（含新建）留空就是清空（会被校验挡住）
+    if(!(keepsStoredKey && !$key.value)) patch.apiKey = $key.value;
     // 「关闭（不思考）」已从界面移除，所以这里不再写 canDisableThinking。
     // 不写这个字段 = 保持文件里已有的值不动，比强行写 true 更安全。
     const hid = g('#mf_hidden');
@@ -4077,10 +4569,12 @@ function openBatchImport(){
   // 为什么不能只用一个：若取列表时也 ++ testSeq，那么「点了获取列表、但请求失败
   // （旧表还在、旧测试结果仍然有效）」的情形会把正在跑的测试白白作废，用户得重跑。
   //
-  // batchBusy / listBusy：谁在处理长任务。它们是「$test 现在能不能点」的唯一判据
-  // （见 syncTestBtn），这样各处只需要更新状态、不用各自去猜该不该放开按钮 ——
+  // batchOwner / listBusy：谁在处理长任务。它们是「$test 现在能不能点」的唯一判据
+  // （见 syncTestBtn），这样各处只需要更新状态、不用各自去猜该不该放开按钮。
+  // batchOwner 存的是「当前这批批量测试的 token」，不是布尔：新列表落地会把它清空，
+  // 旧批次在 finally 里只有 token 仍等于自己时才交还状态，避免误清新批次的状态。
   // 否则很容易出现「谁都以为别人会放开」的责任真空，按钮就此卡死。
-  const st = { url:'', key:'', models:[], picked:new Set(), tested:false, usedUrl:'', csvOk:true, csvPath:'', csvRows:0, testSeq:0, listSeq:0, batchBusy:false, listBusy:false };
+  const st = { url:'', key:'', models:[], picked:new Set(), tested:false, usedUrl:'', csvOk:true, csvPath:'', csvRows:0, testSeq:0, listSeq:0, batchToken:0, batchOwner:null, listBusy:false };
 
   modal(`
     <div class="modal-h">
@@ -4141,7 +4635,7 @@ function openBatchImport(){
   //     同一张表上互相覆盖（后回来的把先回来的结果、勾选一起改掉）；
   //   · 反过来若谁都不放开，按钮就永远禁用了。
   // 收口到一处，两个方向都不会漏。
-  const syncTestBtn = ()=>{ $test.disabled = !!st.batchBusy || !!st.listBusy || !st.models.length; };
+  const syncTestBtn = ()=>{ $test.disabled = !!st.batchOwner || !!st.listBusy || !st.models.length; };
 
   g('#bi_eye').onclick = ()=>{ $key.type = $key.type === 'password' ? 'text' : 'password'; };
 
@@ -4175,7 +4669,7 @@ function openBatchImport(){
       if(st.listSeq !== mySeq) return;   // 已被后发的取列表请求取代：别动界面（遮罩由最新那次负责关）
       busy(false);
       // 取新表失败，旧表还在（st.models 没动）。放开测试入口，但若此刻还有一批
-      // 测试在跑（batchBusy），syncTestBtn 会继续按着不放 —— 否则用户能在旧表上
+      // 测试在跑（batchOwner），syncTestBtn 会继续按着不放 —— 否则用户能在旧表上
       // 再起一批，两批结果会在同一张表上互相覆盖。
       st.listBusy = false;
       syncTestBtn();
@@ -4206,6 +4700,9 @@ function openBatchImport(){
     // 「HTTP 失败但旧表还留着」的情形也作废在途测试 —— 那种情况下旧表仍然有效，
     // 测试结果也有效，作废属于误伤。
     st.testSeq++;
+    // 新表落地，上一代（可能仍在跑）的批量测试就此作废：放开它的占用，让新表
+    // 立刻能起新一批。旧批次 finally 里靠 token 比对，不会把新批次的状态清掉。
+    st.batchOwner = null;
     st.models = asArr(r.models);
     st.usedUrl = r.usedUrl;
     // 把补全结果写回接口地址：用户往往只填了域名或 /v1，列表是靠补全才拿到的。
@@ -4385,7 +4882,8 @@ function openBatchImport(){
     // —— 只有新列表真正落地时 testSeq 才会变（见 $list），代次一变，在途分块的结果
     // 就属于旧表，必须丢掉，否则会画到新列表的同名条目上。
     const mySeq = st.testSeq;
-    st.batchBusy = true;
+    const myToken = ++st.batchToken;
+    st.batchOwner = myToken;
     syncTestBtn();
     showProgress(0, total, '正在测试…');
     try{
@@ -4418,11 +4916,15 @@ function openBatchImport(){
       note(st.picked.size > 0, `测试完成：${st.picked.size} / ${total} 个可用`,
            '失败的行会红字标出来' + extra + '。');
     }finally{
-      // 这轮跑完了，交还「正在测试」的状态。按钮能不能点由 syncTestBtn 统一算：
-      // 若期间用户点过「获取列表」且它还在途（listBusy），按钮会继续保持禁用；
-      // 取列表失败、旧表仍有效时则由那次请求自己收尾。
-      st.batchBusy = false;
-      syncTestBtn();
+      // 这轮跑完了，交还「正在测试」的状态。只在这批仍是当前 owner 时才交还：
+      // 若新列表已落地（batchOwner 被清空）或用户已起了新一批（owner 换成新 token），
+      // 旧批次的收尾不能碰别人的状态，否则会把新表可用/新批次在跑的状态清掉。
+      // 按钮能不能点由 syncTestBtn 统一算：若期间用户点过「获取列表」且它还在途
+      // （listBusy），按钮会继续保持禁用；取列表失败、旧表仍有效时则由那次请求自己收尾。
+      if(st.batchOwner === myToken){
+        st.batchOwner = null;
+        syncTestBtn();
+      }
     }
   };
 
