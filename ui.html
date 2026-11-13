@@ -370,11 +370,16 @@
   .ch-all{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--muted);cursor:pointer}
   .ch-all input{margin:0}
   .cgroup{margin-bottom:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
-  .cg-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px;background:#fbfcfe;border-bottom:1px solid var(--line-2);flex-wrap:wrap}
-  .cg-toggle{background:none;border:0;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--text);padding:2px 4px;display:inline-flex;align-items:center;gap:6px}
+  /* 组头整行都可点：按钮 flex:1 撑满「标题 → 右侧全选框」之间的空白，
+     否则只有文字本身能点，中间一大片是死区。padding 也从行移到按钮上，
+     这样上下边缘同样在可点范围内。 */
+  .cg-head{display:flex;align-items:stretch;justify-content:space-between;gap:0;padding:0;background:#fbfcfe;border-bottom:1px solid var(--line-2);flex-wrap:wrap}
+  .cg-toggle{flex:1 1 auto;min-width:0;background:none;border:0;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--text);padding:7px 10px;display:flex;align-items:center;justify-content:flex-start;gap:6px;text-align:left}
+  .cg-toggle:hover{background:#f2f6fd;color:var(--accent)}
+  .cg-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .cg-arrow{color:var(--faint);font-size:11px;width:12px;display:inline-block}
   .cg-n{color:var(--faint);font-weight:400;font-size:11px}
-  .cg-alls{display:inline-flex;gap:12px}
+  .cg-alls{display:inline-flex;gap:12px;align-items:center;padding-right:10px;flex:0 0 auto}
   .cg-body{padding:6px 10px}
   .cg-empty{font-size:11.5px;color:var(--faint);padding:6px 2px}
   .crow{padding:7px 0;border-bottom:1px dashed var(--line-2)}
@@ -2100,14 +2105,24 @@ async function restoreDialog(name){
         refreshChecks();
       }
     });
-    body.addEventListener('click', e=>{
-      const tg = e.target.closest('.cg-toggle');
-      if(!tg) return;
+    // 展开/折叠：整行（标题 + 中间空白）都可点，只有右侧「全选」区例外。
+    // 按钮本身铺满整行，这里再兜一层——万一点到行内边距或换行后的空隙，
+    // 只要不在全选区里，就当作点了标题。
+    function toggleGroup(tg){
       const box = tg.closest('.cgroup').querySelector('.cg-body');
       const open = box.hasAttribute('hidden');
       if(open) box.removeAttribute('hidden'); else box.setAttribute('hidden','');
       tg.setAttribute('aria-expanded', String(open));
       tg.querySelector('.cg-arrow').textContent = open ? '▾' : '▸';
+    }
+    body.addEventListener('click', e=>{
+      const tg = e.target.closest('.cg-toggle');
+      if(tg){ toggleGroup(tg); return; }
+      const head = e.target.closest('.cg-head');
+      if(head && !e.target.closest('.cg-alls')){
+        const b = head.querySelector('.cg-toggle');
+        if(b) toggleGroup(b);
+      }
     });
 
     // 取清单（只读）；失败显示错误、可重试、可关闭。
