@@ -223,6 +223,10 @@
   }
   .forkbtn:hover:not(:disabled){color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
   .forkbtn:disabled{opacity:.4;cursor:not-allowed}
+  /* 刷新按钮：点击时图标转一圈，给个「正在重新读取」的即时反馈 */
+  .refresh-btn{flex:0 0 auto;height:32px;width:34px;display:inline-flex;align-items:center;justify-content:center;padding:0}
+  .refresh-btn.spin svg{animation:spin .6s linear}
+  @keyframes spin{to{transform:rotate(360deg)}}
   .sess-row .t span{display:block;font-size:10.5px;color:var(--faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sess-row .t .ttl{display:flex;align-items:center;gap:6px;min-width:0}
   .sess-row .t .ttl b{flex:0 1 auto;min-width:0}
@@ -1956,7 +1960,7 @@ async function restoreDialog(name){
     { key:'conflict',     label:'日期和大小不一致',       open:true,  def:'none' },
     { key:'backupBetter', label:'备份里更新更大',         open:false, def:'backup' },
     { key:'backupOnly',   label:'仅备份存在，本地缺失',   open:false, def:'backup' },
-    { key:'localBetter',  label:'时间和大小相同，或备份更旧且更小', open:false, def:'local' }
+    { key:'localBetter',  label:'时间相同，或备份更旧且更小', open:false, def:'local' }
   ];
   const GROUP_KEYS = GROUPS.map(g=>g.key);
   const GROUP_DEF = {}; GROUPS.forEach(g=>{ GROUP_DEF[g.key]=g.def; });
@@ -2599,7 +2603,7 @@ $('#btnAllSessions').onclick = async ()=>{
   modal(`
     <div class="modal-h">
       <div>
-        <h3>本地对话（${list.length}/${r.total}）</h3>
+        <h3 id="allTitle">本地对话（${list.length}/${r.total}）</h3>
         <p id="allSub">${esc(prodName(r.edition || state.edition))} · 含已删除、已归档；云端对话单独一档 · ${running
           ? '客户端正在运行，状态列暂时只读'
           : '客户端未打开，点状态列可直接切换'}</p>
@@ -2609,7 +2613,12 @@ $('#btnAllSessions').onclick = async ()=>{
     <div class="modal-b" style="padding-bottom:10px">
       <div class="frow" id="fAcc"></div>
       <div class="frow" id="fSt"></div>
-      <input id="q" placeholder="搜索标题 / 路径" style="width:100%;height:32px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;font-family:inherit;outline:none">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="q" placeholder="搜索标题 / 路径" style="flex:1;min-width:0;height:32px;border:1px solid var(--line);border-radius:9px;padding:0 12px;font-size:12.5px;font-family:inherit;outline:none">
+        <button type="button" class="btn sm refresh-btn" id="btnRefreshAll" title="重新读取对话列表（等同于关掉本窗口再打开）">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+      </div>
       <div class="sess-box">
         <div class="sess-head"><div>对话</div><div class="r">大小</div><div class="r">更新</div><div>归属</div><div>状态 / 设置</div></div>
         <div id="sessBox"></div>
@@ -2636,6 +2645,19 @@ $('#btnAllSessions').onclick = async ()=>{
     filter.st = b.dataset.st; renderFilters(); paint();
   };
   $('#q').oninput = e=>{ filter.kw = e.target.value.trim().toLowerCase(); paint(); };
+
+  // 搜索框右边的刷新：整份重拉（等同关掉本窗口再打开），搜索词和筛选保留
+  $('#btnRefreshAll').onclick = async ()=>{
+    const b = $('#btnRefreshAll');
+    if(!b || b.disabled) return;
+    b.disabled = true;
+    b.classList.add('spin');
+    try{ await reloadList(); }
+    finally{
+      b.classList.remove('spin');
+      b.disabled = false;
+    }
+  };
 
   $('#sessBox').addEventListener('click', async e=>{
     // 分叉：先于状态切换判断（两个按钮都在行内）
@@ -2774,6 +2796,12 @@ $('#btnAllSessions').onclick = async ()=>{
       // 原来筛的账号如果已经不在了（换号 / 重拉后消失），回落到「全部」，
       // 否则列表会莫名其妙变成空的
       if(filter.acc !== '*' && !accounts.some(a => (a.uid || '') === filter.acc)) filter.acc = '*';
+      // 标题上的计数也要跟着走，否则刷新后数字还是旧的
+      const ttl = $('#allTitle');
+      if(ttl){
+        const tot = (fresh.total === 0 || fresh.total) ? fresh.total : list.length;
+        ttl.textContent = '本地对话（' + list.length + '/' + tot + '）';
+      }
       repaint();
     }catch(e){
       console.error('[reloadList]', e);

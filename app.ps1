@@ -3624,13 +3624,17 @@ function Get-RestoreGroup([bool]$exists, [long]$srcBytes, [long]$srcMs, [long]$d
     #
     #   backupOnly   - the id is not present locally (exists=false)
     #   backupBetter - backup is BOTH newer AND larger
-    #   localBetter  - identical, or strictly older AND smaller
-    #   conflict     - the two axes disagree: newer-but-smaller, older-but-bigger,
-    #                  same time different size, one axis equal ... i.e. everything else
+    #   localBetter  - same timestamp (whatever the size), or strictly older AND smaller
+    #   conflict     - the two axes disagree: newer-but-smaller, older-but-bigger
+    #
+    # "Same timestamp, different size" deliberately sits in localBetter: an equal
+    # updated_at means the client last touched both copies at the same moment, so
+    # there is no newer side to prefer. Defaulting to "keep local" is the safer
+    # suggestion of the two, and it matches what the user asked for.
     if (-not $exists) { return 'backupOnly' }
     if ($srcMs -gt $dstMs -and $srcBytes -gt $dstBytes) { return 'backupBetter' }
-    if (($srcMs -eq $dstMs -and $srcBytes -eq $dstBytes) -or `
-        ($srcMs -lt $dstMs -and $srcBytes -lt $dstBytes)) { return 'localBetter' }
+    if ($srcMs -eq $dstMs) { return 'localBetter' }
+    if ($srcMs -lt $dstMs -and $srcBytes -lt $dstBytes) { return 'localBetter' }
     return 'conflict'
 }
 
@@ -4391,14 +4395,31 @@ function Fork-Session([string]$product, [string]$id) {
         [void][long]::TryParse([string]$rows[0]['updated_at'], [ref]$srcMs)
         $base = [string]$rows[0]['custom_title']
         if (-not $base) { $base = [string]$rows[0]['title'] }
-        $stamp = ' (' + (ConvertFrom-Ms $srcMs) + ')'
-        # Cap the combined title: SQLite TEXT has no length limit, but very long
-        # titles are unreadable in the client sidebar. The stamp is always kept
-        # whole; the original name gets truncated to fit.
-        $maxTitle = 120
+        # Drop a trailing timestamp of OUR OWN making before adding a new one.
+        # Forking a fork would otherwise pile " (date)" up forever - it already
+        # did in real data ("... (2026-11-11 23:38) (2026-11-11 23:38)") - and
+        # once the name is long enough the pile-up pushes the real title out and
+        # the truncation can even cut through the middle of a timestamp.
+        $base = [regex]::Replace($base, '(\s*\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}\))+\s*$', '')
+        $base = $base.Trim()
+        if (-not $base) { $base = 'Untitled' }
+        # updated_at <= 0 has no readable time; appending " ()" would be worse
+        # than no suffix at all.
+        $dt = ConvertFrom-Ms $srcMs
+        $stamp = ''
+        if ($dt) { $stamp = ' (' + $dt + ')' }
+        # Cap the combined title. 60 characters: the client trims its own
+        # automated titles around 50, so anything longer is never actually read.
+        # The stamp is always kept whole; the name is shortened and marked with
+        # a trailing "..." (ASCII - this file must stay pure ASCII).
+        $maxTitle = 60
         if ($base.Length + $stamp.Length -gt $maxTitle) {
-            $keep = [Math]::Max(1, $maxTitle - $stamp.Length)
-            $base = $base.Substring(0, $keep)
+            $keep = [Math]::Max(1, $maxTitle - $stamp.Length - 3)   # 3 for the dots
+            # Never split a surrogate pair: a truncated emoji lands in the db as
+            # U+FFFD (WbSqlite writes UTF-8 with a replacement fallback), and the
+            # ".Substring" here counts UTF-16 units, not characters.
+            if ($keep -lt $base.Length -and [char]::IsHighSurrogate($base[$keep - 1])) { $keep-- }
+            $base = $base.Substring(0, [Math]::Max(1, $keep)) + '...'
         }
         $newTitle = $base + $stamp
         $newId = [guid]::NewGuid().ToString()
