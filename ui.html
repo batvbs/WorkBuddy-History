@@ -1579,7 +1579,7 @@ function setPage(p){
 document.querySelectorAll('.nav [data-page]').forEach(a=> a.onclick = ()=> setPage(a.dataset.page));
 
 /* ---------- backup ---------- */
-$('#btnBackup').onclick = ()=>{
+function openBackupDialog(){
   const ed = curEd() || {};
   const st = ed.stats || {};
   modal(`
@@ -1606,9 +1606,30 @@ $('#btnBackup').onclick = ()=>{
         <div>${esc(edName(ed.id))} 客户端正在运行，数据库可能还有未落盘的事务。备份仍会成功，但要拿到最一致的快照，建议先退出这个版本的客户端再备份。</div></div>` : ''}
     </div>
     <div class="modal-f">
+      ${ed.running ? '<button class="btn" id="doStopFromBackup" style="margin-right:auto">关闭客户端</button>' : ''}
       <button class="btn" data-close>取消</button>
       <button class="btn primary" id="doBackup">开始备份</button>
     </div>`);
+  // 客户端在跑时底栏多一个「关闭客户端」：和账号切换页共用同一套关闭流程
+  // （确认 → /api/client/stop → 重新拉一遍状态），不另写一份。
+  // 关完把这个窗口整份重开，效果等同「关掉窗口再点立即备份」——底栏按钮和
+  // 上面那条「数据库可能还有未落盘的事务」的警告都会消失。
+  const stopBtn = $('#doStopFromBackup');
+  if(stopBtn) stopBtn.onclick = ()=>{
+    modal(`<div class="modal-h"><div><h3>关闭客户端？</h3><p>${esc(prodName(ed.id))}</p></div><button class="x" data-close>&times;</button></div>
+      <div class="modal-b">
+        <div class="note warn">
+          <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 4.3 2.8 17.5A1.6 1.6 0 0 0 4.2 20h15.6a1.6 1.6 0 0 0 1.4-2.5L13.7 4.3a1.6 1.6 0 0 0-2.8 0z"/></svg>
+          <div>客户端正在运行，退出会关闭它，<b>正在进行中的任务会被中断</b>。关闭后回到备份窗口，可以直接开始备份。</div>
+        </div>
+      </div>
+      <div class="modal-f"><button class="btn" data-close>取消</button><button class="btn primary" id="doStopFromBackupOk">关闭客户端</button></div>`);
+    $('#doStopFromBackupOk').onclick = async ()=>{
+      await stopClient({ id: ed.id });
+      // 成功就重开（按钮消失）；万一没关掉，重开也会如实把按钮和警告再显示出来。
+      openBackupDialog();
+    };
+  }
   $('#doBackup').onclick = async ()=>{
     const inc = $('#cbAtt').checked;
     closeModal();
@@ -1616,11 +1637,20 @@ $('#btnBackup').onclick = ()=>{
     try{
       const r = await api('/api/backup/create', { includeAttachments: inc, edition: state.edition });
       await load();
-      toast('备份完成（' + edName(r.backup.edition) + '）：' + bkCount(r.backup) + ' 个对话，' + fmtBytes(r.backup.totalBytes), 'ok');
+      const copyErrs = Number((r.backup && r.backup.attachmentErrors) || 0);
+      if(copyErrs){
+        // 一个被占用的文件不该让整次备份失败，但也绝不能说成「完成」：
+        // 这份快照少了东西，用户得知道。
+        toast('备份已生成，但有 ' + copyErrs + ' 个文件没能复制（可能被占用），这份备份不完整；建议关掉客户端后再备份一次', 'err');
+      }else{
+        toast('备份完成（' + edName(r.backup.edition) + '）：' + bkCount(r.backup) + ' 个对话，' + fmtBytes(r.backup.totalBytes), 'ok');
+      }
     }catch(e){ toast('备份失败：' + errText(e.message), 'err'); }
     finally{ busy(false); }
   };
-};
+}
+
+$('#btnBackup').onclick = ()=> openBackupDialog();
 
 $('#btnOpenBackups').onclick = ()=> api('/api/open', { target:'backups' }).catch(()=>{});
 
@@ -1943,15 +1973,22 @@ async function restoreDialog(name){
       if(r.remapDone) lines.push('对话归属已改写为当前账号');
       else if(remap && r.remapReason) lines.push('归属未改写：' + (REASON[r.remapReason] || r.remapReason));
       if(r.clientWasOpen) lines.push('客户端已关闭，等你确认后再打开');
+      // 数据库已经写好了，但有文件没复制成功：那些对话会显示成「仅记录」。
+      // 说清楚是哪一步、下次怎么办，不要报成干净的「恢复完成」。
+      const fileErrs = Number(r.fileErrors || 0);
+      if(fileErrs){
+        lines.push(`有 <b>${fileErrs}</b> 个文件没能写到本地（可能被占用或磁盘已满），这些对话的正文暂时缺内容`);
+      }
       // 只有「没改写归属、且备份确实属于别的账号」时，才需要提醒去点「找回对话」
       const needFind = !r.remapDone && diffAccount;
+      const noteParts = [];
+      if(fileErrs) noteParts.push('备份里的文件还在，<b>过一会儿再恢复一次</b>就能补齐；不想全量重来可以等客户端关着时重试。');
+      if(needFind) noteParts.push('恢复完成后，归属不是当前账号的对话不会自动出现在列表里。请回到「本地对话」，点蓝色的 <b>找回对话</b>，勾选后把它们找回到当前账号。');
       doneDialog({
-        title: '恢复完成',
+        title: fileErrs ? '恢复完成，但文件没写全' : '恢复完成',
         edition: r.edition,
         lines,
-        note: needFind
-          ? '恢复完成后，归属不是当前账号的对话不会自动出现在列表里。请回到「本地对话」，点蓝色的 <b>找回对话</b>，勾选后把它们找回到当前账号。'
-          : ''
+        note: noteParts.join(' ')
       });
     }catch(e){
       busy(false);
@@ -2374,7 +2411,10 @@ $('#btnRecover').onclick = async ()=>{
     closeModal();
     busy(true, '正在找回对话…', doBackup ? '备份数据库 → 关闭客户端 → 改写归属 → 合并事务日志' : '关闭客户端 → 改写归属 → 合并事务日志');
     try{
-      const res = await api('/api/recover/apply', { edition: state.edition, ids, backup: doBackup });
+      // 用**扫描时那个版本**，不是当前选中的版本：扫描是异步的，期间切了版本的话
+      // state.edition 已经变，而列表里的 id 还是旧版本的——两边 id 可能撞车，
+      // 那就改到了另一个版本的同 id 对话上。
+      const res = await api('/api/recover/apply', { edition: r.edition || state.edition, ids, backup: doBackup });
       busy(false);
       const lines = [];
       lines.push(`已把 ${res.recovered} 个对话找回到当前账号`);
@@ -4441,7 +4481,16 @@ function openModelEditor(id, index){
   };
 
   // ---------- 保存 ----------
+  // 这个编辑器是异步保存的：测试请求还在路上时，用户可能已经关掉它、再打开
+  // 另一个版本/另一个模型的编辑器。await 回来后如果继续按 $id / state.edition
+  // 取值，读到的是**新编辑器**的内容，会把它写进新版本的同 id 模型。
+  // 打开时记下锚点与版本，每个 await 之后校验一次，不属于自己就静默退出。
   async function doSave(){
+    const anchor = $id;
+    const edAtStart = state.edition;
+    function detached(){
+      return !anchor || !anchor.isConnected || state.edition !== edAtStart;
+    }
     const miss = missing();
     if(miss.id || miss.url || miss.apiKey){
       const names = [];
@@ -4476,6 +4525,7 @@ function openModelEditor(id, index){
         r = { ok:false, stage:'validate', message: errText(e.message) };
         requestFailed = true;
       }
+      if(detached()){ busy(false); return; }
       if(r && r.ok === true){
         busy(false);
         const fixed = String(r.fixedUrl || '').trim();
@@ -4497,8 +4547,10 @@ function openModelEditor(id, index){
         }
         // 请求本身就失败的情况上面已经确认过了，不再重复弹窗
         if(!requestFailed && !await confirmAnyway('模型不可用，仍然保存吗？')) return;
+        if(detached()){ busy(false); return; }
       }
     }
+    if(detached()) return;
     const patch = buildPatch();
     closeModal();
     busy(true, isNew ? '正在添加…' : '正在保存…', '校验后写回 models.json');
