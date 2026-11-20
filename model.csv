@@ -71,8 +71,9 @@ glm-5.3,是,否,是,低|高|极致,高,1000000,131072,否,GLM API
 glm-5.3-flash,是,是,是,低|高|极致,高,1000000,131072,否,GLM API
 glm-4.7,是,否,是,,,204800,131072,否,GLM API
 glm-4.6v,是,是,是,,,128000,32768,否,GLM API
+glm-5v-turbo,是,是,是,,,200000,131072,否,GLM API
 # ---- Kimi ----
-kimi-k3,是,是,是,低|高|极致,高,1000000,131072,否,Kimi
+kimi-k3,是,是,是,低|高|极致,高,1048576,1048576,否,Kimi
 k3,是,是,是,低|高|极致,高,1048576,131072,否,Kimi
 k3-256k,是,是,是,低|高|极致,高,262144,131072,否,Kimi
 kimi-k2.7-code,是,是,是,,,262144,262144,否,Kimi
@@ -80,9 +81,24 @@ kimi-k2.6,是,是,是,,,262144,262144,否,Kimi
 kimi-k2.5,是,是,是,,,262144,98304,否,Kimi
 kimi-for-coding,是,是,是,低|高|极致,高,1048576,32768,否,Kimi
 kimi-for-coding-highspeed,是,是,是,,,262144,32768,否,Kimi
+kimi-k3.1-pro,是,是,是,低|高|极致,极致,1048576,1048576,否,Kimi
+kimi-k3.1-pro-highspeed,是,是,是,低|高|极致,极致,1048576,1048576,否,Kimi
+k3.1-pro,是,是,是,低|高|极致,高,1048576,,否,Kimi
+k3.1-pro-highspeed,是,是,是,低|高|极致,高,1048576,,否,Kimi
+kimi-k2.8-preview,是,是,是,低|高|极致,高,1000000,1000000,否,Kimi
+kimi-k2-0905-preview,是,否,否,,,,,否,Kimi
+kimi-k2-turbo-preview,是,否,否,,,,,否,Kimi
+kimi-k2-0711-preview,是,否,否,,,,,否,Kimi
+kimi-k2-thinking,是,否,是,,,,,否,Kimi
+kimi-k2-thinking-turbo,是,否,是,,,,,否,Kimi
+kimi-k2.8-preview
 # ---- MiniMax ----
-minimax-m3,是,是,是,,,1048576,512000,否,MiniMax
+minimax-m3,是,是,是,,,1000000,524288,否,MiniMax
 minimax-m2.7,是,否,是,,,204800,131072,否,MiniMax
+MiniMax-M3.1-Flash,是,是,是,低|中|高|超高|极致,极致,1000000,524288,否,MiniMax
+minimax-m3.1-flash,是,是,是,,,1000000,524288,否,MiniMax
+MiniMax-M2.5,是,是,是,,,,,否,MiniMax
+MiniMax-M2.5-highspeed,是,是,是,,,,,否,MiniMax
 # ---- 通义千问（客户端没有它家的图标，只能落到 Custom） ----
 qwen3.8-max,是,是,是,低|中|超高,中,1000000,131072,否,Custom
 qwen3.8-flash,是,是,是,低|中|超高,中,1000000,131072,否,Custom
@@ -132,12 +148,13 @@ hunyuan-2.0-thinking,是,否,是,,,,,否,Hunyuan
 hunyuan-t1,是,否,是,,,,,否,Hunyuan
 hunyuan-turbos,是,否,否,,,,,否,Hunyuan
 hunyuan-*,是,否,是,,,,,否,Hunyuan
-hy3,是,否,是,,,192000,128000,否,Hunyuan
-hy3-preview,是,否,是,,,192000,128000,否,Hunyuan
-hy3*,是,否,是,,,192000,128000,否,Hunyuan
-hy4,是,否,是,,,983040,65536,否,Hunyuan
+hy3,是,否,是,,,192000,131072,否,Hunyuan
+hy3-preview,是,否,是,,,192000,131072,否,Hunyuan
+hy3*,是,否,是,,,192000,131072,否,Hunyuan
+hy4,是,是,是,高,高,983040,65536,否,Hunyuan
 hy4-preview,是,否,是,,,983040,65536,否,Hunyuan
-hy4*,是,否,是,,,983040,65536,否,Hunyuan
+hy4-flash,是,是,是,高,高,983040,65536,否,Hunyuan
+hy4*,是,是,是,,,983040,65536,否,Hunyuan
 # ---- 小米 MiMo ----
 mimo-v2.5-pro,是,否,是,,,1000000,131072,否,Custom
 mimo-v2.6-pro,是,是,是,,,1000000,131072,否,Custom
@@ -285,6 +302,9 @@ deepseek-*,是,是,是,低|高|极致,高,1000000,384000,否,DeepSeek
 */deepseek-*,是,是,是,低|高|极致,高,1000000,384000,否,DeepSeek
 *.deepseek-*,是,是,是,低|高|极致,高,1000000,384000,否,DeepSeek
 # ---- 智谱 GLM ----
+glm-5v*,是,是,是,,,200000,131072,否,GLM API
+*/glm-5v*,是,是,是,,,200000,131072,否,GLM API
+*.glm-5v*,是,是,是,,,200000,131072,否,GLM API
 glm-5.3-flash*,是,是,是,低|高|极致,高,1000000,131072,否,GLM API
 */glm-5.3-flash*,是,是,是,低|高|极致,高,1000000,131072,否,GLM API
 *.glm-5.3-flash*,是,是,是,低|高|极致,高,1000000,131072,否,GLM API
@@ -318,9 +338,9 @@ k3*,是,是,是,低|高|极致,高,1048576,131072,否,Kimi
 */k3*,是,是,是,低|高|极致,高,1048576,131072,否,Kimi
 *.k3*,是,是,是,低|高|极致,高,1048576,131072,否,Kimi
 # ---- MiniMax ----
-minimax-m3*,是,是,是,,,1048576,512000,否,MiniMax
-*/minimax-m3*,是,是,是,,,1048576,512000,否,MiniMax
-*.minimax-m3*,是,是,是,,,1048576,512000,否,MiniMax
+minimax-m3*,是,是,是,,,1000000,524288,否,MiniMax
+*/minimax-m3*,是,是,是,,,1000000,524288,否,MiniMax
+*.minimax-m3*,是,是,是,,,1000000,524288,否,MiniMax
 minimax-m2.7*,是,否,是,,,204800,131072,否,MiniMax
 */minimax-m2.7*,是,否,是,,,204800,131072,否,MiniMax
 *.minimax-m2.7*,是,否,是,,,204800,131072,否,MiniMax

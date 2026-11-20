@@ -10,7 +10,7 @@
 | | 地址 | 条数 |
 |---|---|---|
 | 国际版 | `https://download.codebuddy.ai/connectors-config-v2/custom-model/customModelSettings.json` | providers 18 / modelOptions **162** |
-| 国内版 | `https://static.workbuddy.cn/connectors-config-v2/custom-model/customModelSettings.json` | providers 16 / modelOptions **160** |
+| 国内版 | `https://static.workbuddy.cn/connectors-config-v2/custom-model/customModelSettings.json` | providers 16 / modelOptions **161** |
 
 安装包里 `contexts.js` 里的那张表（`lz`，94 条）**只是拉取失败时的兜底**。
 一开始我按兜底表统计，得出「100% 覆盖」，是**虚高的**——
@@ -61,15 +61,15 @@
 | 数据 | 条数 | 命中 | 覆盖率 |
 |---|---|---|---|
 | 国际版（可见服务商下的模型选项） | 162 | 156 | **96.3%** |
-| 国内版（可见服务商下的模型选项） | 160 | 154 | **96.2%** |
+| 国内版（可见服务商下的模型选项） | 161 | 155 | **96.3%** |
 
 未命中的只剩 6 条/版，都是**故意不填**的：
 
-- `auto`（5 处，各套餐的「自动」档）—— 这是**客户端保留的内置模型 id**
+- `auto`（国际版 5 处 / 国内版 4 处，各套餐的「自动」档）—— 这是**客户端保留的内置模型 id**
   （`auto` / `auto-chat` / `fast-model` / `balanced-model` / `deep-model`）。
   往 models.json 里写一个 `auto` 会和客户端自己的自动档**撞名**，所以不能预填。
-- `tc-code-latest` —— 它的 displayName **也叫 "Auto"**，是腾讯 Coding Plan 的自动档，
-  同理不填。
+- `tc-code-latest`（国际版 1 处；国内版 2 处：`tencent-coding` 和 `tencent-token-plan` 各挂了一个）——
+  它的 displayName **也叫 "Auto"**，是腾讯 Coding Plan 的自动档，同理不填。
 
 （早先用本地兜底表算出的 95.7% / 官方自营 100%，是口径不对造成的虚高，已废弃。）
 
@@ -78,6 +78,36 @@
 按远端配置补的（之前完全没覆盖）：`hy4` / `hy4-preview`、`mimo-v2.5-pro` /
 `mimo-v2.6-pro` / `mimo-v2.6-flash`、`step-5-preview`，以及带 vendor 前缀的
 `deepseek/deepseek-flash` / `deepseek/deepseek-v4-flash-vision-exp`。
+
+### 2026-11-20 同步记录
+
+重新拉了两版远端配置 + 解包复核了两版安装包内置清单（国际版 Nov 13 构建）：
+
+- **内置清单：1011 个模型 id 零增零删**，旧快照逐条保留，`builtin-models.json` 不动。
+- **国际版远端配置：162 条零变化**，`preset-models-intl.json` 不动。
+- **国内版远端配置 160 → 161 条**，`preset-models-cn.json` 已更新。模型层面：
+  - 新增：`kimi-k3.1-pro` / `kimi-k3.1-pro-highspeed`（kimi-cn、kimi-coding 的
+    `k3.1-pro` / `k3.1-pro-highspeed`、腾讯 tokenhub/-sg 也挂）、`hy4-flash`
+    （六个腾讯套餐渠道）、`MiniMax-M3.1-Flash`（minimax-cn）/ `minimax-m3.1-flash`
+    （tokenhub）、`k3` / `k3-256k` / `kimi-for-coding`（kimi-coding）。
+  - 移除：kimi-cn/kimi-coding 的 `kimi-k2.5` / `kimi-k2-0905-preview` /
+    `kimi-k2-turbo-preview` / `kimi-k2.6` / `kimi-k3`、minimax-cn 的 M2/M2.1/M2.5
+    系列、tokenhub 的 `deepseek-v4-flash*` / `glm-5v-turbo`（csv 里的行保留不删，
+    官方渠道下这些 id 还在）。
+  - 能力值修正：`kimi-k3` 输出上限 131072 → **1048576**、`hy3` 系列 128000 → **131072**、
+    `hy4` 补了推理档位（仅「高」）并确认支持图片、`deepseek-v4-pro` 转售渠道补全
+    输入/输出上限（1000000/384000，与 csv 一致）。
+- **model.csv 相应更新（344 → 364 行）**：
+  - 新增精确行：kimi-k3.1-pro 系列 ×4、`kimi-k2.8-preview`、kimi 老 K2 系列
+    （`kimi-k2-0905-preview` / `kimi-k2-turbo-preview` / `kimi-k2-0711-preview` /
+    `kimi-k2-thinking` / `kimi-k2-thinking-turbo`，图片列按官方改「否」）、
+    `MiniMax-M3.1-Flash` / `minimax-m3.1-flash`、`MiniMax-M2.5` / `MiniMax-M2.5-highspeed`、
+    `hy4-flash`、`glm-5v-turbo`，以及 `glm-5v*` 通配三连。
+  - 修正：`kimi-k3`（1048576/1048576）、`minimax-m3` 精确行与 `minimax-m3*` 通配行
+    （1000000/524288，官方口径）、`hy3` 系列（输出 131072）、`hy4`（图片=是，
+    档位=高）与 `hy4*`（图片=是）。
+  - 剩余的「csv 与某渠道配置不一致」均为**官方自营 vs 转售渠道**差异（腾讯
+    tokenhub/-sg、tencent-coding 的改写值），csv 一律采信官方自营口径，不跟转售渠道走。
 
 ### 混元系列（内置表里没有，仍然预填了）
 
