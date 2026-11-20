@@ -1,5 +1,5 @@
 <#
-  WorkBuddy Keeper 2.0.0
+  WorkBuddy Keeper 2.0.1
   Session backup / restore + account switch for the WorkBuddy desktop client.
   Supports both editions (China and international) side by side.
 
@@ -37,7 +37,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$AppVersion = '2.0.0'
+$AppVersion = '2.0.1'
 
 # --------------------------------------------------------------------------
 # paths
@@ -8447,6 +8447,18 @@ while ($true) {
 }
 
 try { $listener.Stop() } catch { }
+# The browser window can outlive the backend: quitting from the page only stops
+# this process, and window.close() is refused for windows the browser launched
+# from a command line. The open window keeps data\window-profile locked, which
+# makes the whole program folder impossible to delete or rename - so close it
+# here, then make sure no msedge process is still holding our private profile.
+try { [void](Close-AppWindow) } catch { }
+try {
+    $profileDir = Join-Path $DataDir 'window-profile'
+    Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($profileDir, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+} catch { }
 try {
     $inst = Read-JsonFile $script:InstancePath
     if ($script:OwnsInstance -and $inst -and [int]$inst.pid -eq $PID) {
