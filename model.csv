@@ -96,7 +96,6 @@ kimi-k2.8-preview
 minimax-m3,是,是,是,,,1000000,524288,否,MiniMax
 minimax-m2.7,是,否,是,,,204800,131072,否,MiniMax
 MiniMax-M3.1-Flash,是,是,是,低|中|高|超高|极致,极致,1000000,524288,否,MiniMax
-minimax-m3.1-flash,是,是,是,,,1000000,524288,否,MiniMax
 MiniMax-M2.5,是,是,是,,,,,否,MiniMax
 MiniMax-M2.5-highspeed,是,是,是,,,,,否,MiniMax
 # ---- 通义千问（客户端没有它家的图标，只能落到 Custom） ----

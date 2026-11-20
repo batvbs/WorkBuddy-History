@@ -97,11 +97,12 @@
   - 能力值修正：`kimi-k3` 输出上限 131072 → **1048576**、`hy3` 系列 128000 → **131072**、
     `hy4` 补了推理档位（仅「高」）并确认支持图片、`deepseek-v4-pro` 转售渠道补全
     输入/输出上限（1000000/384000，与 csv 一致）。
-- **model.csv 相应更新（344 → 364 行）**：
+- **model.csv 相应更新（344 → 363 行）**：
   - 新增精确行：kimi-k3.1-pro 系列 ×4、`kimi-k2.8-preview`、kimi 老 K2 系列
     （`kimi-k2-0905-preview` / `kimi-k2-turbo-preview` / `kimi-k2-0711-preview` /
     `kimi-k2-thinking` / `kimi-k2-thinking-turbo`，图片列按官方改「否」）、
-    `MiniMax-M3.1-Flash` / `minimax-m3.1-flash`、`MiniMax-M2.5` / `MiniMax-M2.5-highspeed`、
+    `MiniMax-M3.1-Flash`（csv 匹配忽略大小写，这一行同时覆盖远端里小写的
+    `minimax-m3.1-flash`，不必写两行）、`MiniMax-M2.5` / `MiniMax-M2.5-highspeed`、
     `hy4-flash`、`glm-5v-turbo`，以及 `glm-5v*` 通配三连。
   - 修正：`kimi-k3`（1048576/1048576）、`minimax-m3` 精确行与 `minimax-m3*` 通配行
     （1000000/524288，官方口径）、`hy3` 系列（输出 131072）、`hy4`（图片=是，
